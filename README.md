@@ -109,6 +109,12 @@ adding a new one is a single adapter crate.
 Gemini is listing-only (its `logs.json` records only user prompts). Pi is read-only
 for now (full list/log/tree, but branch/port unverified).
 
+**Write operations** (`branch`, `revert`, `merge`, `port`) work for **Claude Code,
+Codex CLI, and OpenCode**. Claude is fully verified; Codex and OpenCode writes are
+**experimental** — they produce new sessions via each tool's own format/import, so
+confirm the resumed session looks right. `merge` works branch→main *and*
+branch→branch (it finds the shared base and appends the other side's work).
+
 Where each tool's data lives: Claude `~/.claude`, Codex `~/.codex/sessions`, OpenCode
 its SQLite db (`~/.local/share/opencode`), Gemini `~/.gemini/tmp/*/logs.json`, Pi
 `~/.pi/agent/sessions`. Override with `SILY_CLAUDE_HOME`, `SILY_CODEX_HOME`,

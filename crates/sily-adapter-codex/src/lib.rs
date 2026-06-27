@@ -224,6 +224,78 @@ pub fn branch(codex_home: &Path, id: &str, at: Option<usize>) -> Result<Branched
     })
 }
 
+/// Merge `branch` into `main`: new rollout = main's full records + the branch's
+/// message records after their common (role,text) prefix. Experimental.
+pub fn merge(codex_home: &Path, main_id: &str, branch_id: &str) -> Result<Branched> {
+    let main_path =
+        find_session_file(codex_home, main_id).ok_or_else(|| Error::SessionNotFound(main_id.to_string()))?;
+    let branch_path = find_session_file(codex_home, branch_id)
+        .ok_or_else(|| Error::SessionNotFound(branch_id.to_string()))?;
+    let main_text = fs::read_to_string(&main_path)?;
+    let branch_text = fs::read_to_string(&branch_path)?;
+
+    let main_msgs = message_role_text(&main_text);
+    // branch message (role,text) paired with their raw lines, in order.
+    let mut branch_msgs: Vec<(String, String)> = Vec::new();
+    let mut branch_msg_lines: Vec<String> = Vec::new();
+    for line in branch_text.lines() {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if is_message(&v) {
+                let p = v.get("payload");
+                let role = p.and_then(|p| p.get("role")).and_then(Value::as_str).unwrap_or("").to_string();
+                let text = p.and_then(|p| p.get("content")).map(extract_text).unwrap_or_default();
+                branch_msgs.push((role, text));
+                branch_msg_lines.push(line.to_string());
+            }
+        }
+    }
+    let common = main_msgs
+        .iter()
+        .zip(branch_msgs.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let mut lines: Vec<String> = main_text.lines().filter(|l| !l.trim().is_empty()).map(str::to_string).collect();
+    let new_id = uuid::Uuid::new_v4().to_string();
+    rewrite_meta_id(&mut lines, &new_id);
+    let tail = &branch_msg_lines[common..];
+    lines.extend(tail.iter().cloned());
+
+    let now = chrono::Utc::now();
+    let dir = codex_home
+        .join("sessions")
+        .join(now.format("%Y").to_string())
+        .join(now.format("%m").to_string())
+        .join(now.format("%d").to_string());
+    fs::create_dir_all(&dir)?;
+    let fname = format!("rollout-{}-{}.jsonl", now.format("%Y-%m-%dT%H-%M-%S"), new_id);
+    let mut body = lines.join("\n");
+    body.push('\n');
+    fs::write(dir.join(fname), body)?;
+
+    Ok(Branched {
+        new_id: new_id.clone(),
+        resume: format!("codex resume {new_id}"),
+        kept_messages: main_msgs.len() + tail.len(),
+    })
+}
+
+/// (role, text) for each user/assistant message record, in file order.
+fn message_role_text(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if is_message(&v) {
+                let p = v.get("payload");
+                let role = p.and_then(|p| p.get("role")).and_then(Value::as_str).unwrap_or("").to_string();
+                let t = p.and_then(|p| p.get("content")).map(extract_text).unwrap_or_default();
+                out.push((role, t));
+            }
+        }
+    }
+    out
+}
+
 /// Create a brand-new Codex session seeded with a single user message (used by
 /// cross-provider porting). Returns (new_id, resume command).
 pub fn create_session(codex_home: &Path, cwd: &str, first_user_text: &str) -> Result<(String, String)> {

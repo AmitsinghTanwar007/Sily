@@ -204,8 +204,38 @@ pub fn create_session(directory: &str, first_user_text: &str) -> Result<Branched
         ]
     });
 
-    let tmp = std::env::temp_dir().join(format!("sily-oc-port-{}.json", std::process::id()));
-    std::fs::write(&tmp, serde_json::to_string(&doc).map_err(io_err)?)?;
+    import_doc(&doc, 1)
+}
+
+/// Merge `branch` into `main` via export/import: combined messages = main's +
+/// the branch's messages after their common (text) prefix. Experimental.
+pub fn merge(main_id: &str, branch_id: &str) -> Result<Branched> {
+    let mut main = export(main_id)?;
+    let branch = export(branch_id)?;
+    let main_msgs = main.get("messages").and_then(Value::as_array).cloned().unwrap_or_default();
+    let branch_msgs = branch.get("messages").and_then(Value::as_array).cloned().unwrap_or_default();
+    let common = main_msgs
+        .iter()
+        .zip(branch_msgs.iter())
+        .take_while(|(a, b)| message_text(a) == message_text(b))
+        .count();
+    let mut combined = main_msgs;
+    combined.extend(branch_msgs.into_iter().skip(common));
+    let kept = combined.len();
+    if let Some(obj) = main.as_object_mut() {
+        obj.insert("messages".into(), Value::Array(combined));
+        if let Some(info) = obj.get_mut("info").and_then(Value::as_object_mut) {
+            info.insert("title".into(), Value::String("Merged by sily".into()));
+        }
+    }
+    import_doc(&main, kept)
+}
+
+/// Write a session document to a temp file, run `opencode import`, and parse the
+/// new session id from the output.
+fn import_doc(doc: &Value, kept: usize) -> Result<Branched> {
+    let tmp = std::env::temp_dir().join(format!("sily-oc-import-{}.json", std::process::id()));
+    std::fs::write(&tmp, serde_json::to_string(doc).map_err(io_err)?)?;
     let out = Command::new("opencode")
         .arg("import")
         .arg(&tmp)
@@ -225,7 +255,7 @@ pub fn create_session(directory: &str, first_user_text: &str) -> Result<Branched
     );
     let new_id = find_new_session_id(&combined, "");
     let resume = new_id.as_ref().map(|i| format!("opencode --session {i}"));
-    Ok(Branched { new_id, resume, kept_messages: 1 })
+    Ok(Branched { new_id, resume, kept_messages: kept })
 }
 
 fn export(session_id: &str) -> Result<Value> {

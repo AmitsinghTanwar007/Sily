@@ -7,7 +7,7 @@ use sily_core::model::Role;
 use sily_core::provider::{MsgPoint, NewSession, Provider};
 use sily_core::store::ProjectSessions;
 
-use crate::{branch, create_session, find_session_file, list_all_projects, message_points, truncate};
+use crate::{branch, create_session, find_session_file, list_all_projects, merge, message_points, truncate};
 
 pub struct CodexProvider {
     home: PathBuf,
@@ -70,5 +70,10 @@ impl Provider for CodexProvider {
     fn create_session(&self, cwd: &str, first_user_text: &str) -> Result<NewSession> {
         let (id, resume) = create_session(&self.home, cwd, first_user_text)?;
         Ok(NewSession { id, resume, messages: 1 })
+    }
+
+    fn merge(&self, main_id: &str, branch_id: &str) -> Result<NewSession> {
+        let b = merge(&self.home, main_id, branch_id)?;
+        Ok(NewSession { id: b.new_id, resume: b.resume, messages: b.kept_messages })
     }
 }

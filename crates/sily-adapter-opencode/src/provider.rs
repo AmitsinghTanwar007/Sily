@@ -7,7 +7,7 @@ use sily_core::model::Role;
 use sily_core::provider::{MsgPoint, NewSession, Provider};
 use sily_core::store::ProjectSessions;
 
-use crate::{branch, create_session, list_all_projects, message_points, Branched};
+use crate::{branch, create_session, list_all_projects, merge, message_points, Branched};
 
 pub struct OpenCodeProvider {
     db_path: PathBuf,
@@ -58,5 +58,9 @@ impl Provider for OpenCodeProvider {
 
     fn create_session(&self, cwd: &str, first_user_text: &str) -> Result<NewSession> {
         into_new(create_session(cwd, first_user_text)?)
+    }
+
+    fn merge(&self, main_id: &str, branch_id: &str) -> Result<NewSession> {
+        into_new(merge(main_id, branch_id)?)
     }
 }
