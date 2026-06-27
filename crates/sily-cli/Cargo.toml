@@ -1,0 +1,21 @@
+[package]
+name = "sily-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "sily CLI: git-like commit / branch / revert for AI sessions."
+
+[[bin]]
+name = "sily"
+path = "src/main.rs"
+
+[dependencies]
+sily-core = { path = "../sily-core" }
+sily-adapter-claude = { path = "../sily-adapter-claude" }
+clap = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

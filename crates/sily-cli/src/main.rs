@@ -1,0 +1,298 @@
+//! sily — a git-like commit / branch / revert system for AI sessions.
+//!
+//! The CLI is provider-agnostic in spirit: it talks to a `SessionStore`. Today
+//! the only backend is Claude Code; a `--provider` flag / registry can select
+//! others later without touching command logic.
+
+mod commitstore;
+mod render;
+
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+
+use sily_core::model::Commit;
+use sily_core::ops::{branch_at, diff, truncate_at};
+use sily_core::store::SessionStore;
+use sily_adapter_claude::ClaudeStore;
+
+use commitstore::CommitStore;
+
+/// One error type for the CLI. `From` impls let command code use `?` directly
+/// instead of stringifying every fallible call.
+#[derive(Debug)]
+enum CliError {
+    Core(sily_core::Error),
+    Io(std::io::Error),
+    Msg(String),
+}
+
+impl std::fmt::Display for CliError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CliError::Core(e) => write!(f, "{e}"),
+            CliError::Io(e) => write!(f, "{e}"),
+            CliError::Msg(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl From<sily_core::Error> for CliError {
+    fn from(e: sily_core::Error) -> Self {
+        CliError::Core(e)
+    }
+}
+
+impl From<std::io::Error> for CliError {
+    fn from(e: std::io::Error) -> Self {
+        CliError::Io(e)
+    }
+}
+
+impl From<String> for CliError {
+    fn from(m: String) -> Self {
+        CliError::Msg(m)
+    }
+}
+
+impl From<&str> for CliError {
+    fn from(m: &str) -> Self {
+        CliError::Msg(m.to_string())
+    }
+}
+
+#[derive(Parser)]
+#[command(name = "sily", version, about = "git-like commit / branch / revert for AI sessions")]
+struct Cli {
+    /// Project working directory whose sessions to operate on
+    /// (defaults to the current directory).
+    #[arg(long, global = true)]
+    cwd: Option<String>,
+
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// List sessions in the current project.
+    List,
+    /// Print the linear history of a session.
+    Log { session: String },
+    /// Show the branch tree of a session.
+    Tree { session: String },
+    /// Save a commit (a named pointer) at a session's HEAD or a chosen message.
+    Commit {
+        session: String,
+        /// Name for the commit (defaults to c1, c2, …).
+        #[arg(long)]
+        name: Option<String>,
+        /// Note to attach.
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Message uuid to point at (defaults to the session's last message).
+        #[arg(long)]
+        at: Option<String>,
+    },
+    /// List saved commits.
+    Commits,
+    /// Create a new session branched from a message (defaults to HEAD).
+    Branch {
+        session: String,
+        #[arg(long)]
+        at: Option<String>,
+    },
+    /// Restore a commit. Default: fork into a NEW session (non-destructive).
+    Revert {
+        commit: String,
+        /// Destructive: truncate the original session back to the commit.
+        #[arg(long)]
+        hard: bool,
+    },
+    /// Show where two sessions diverge.
+    Diff { a: String, b: String },
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match run(cli) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("sily: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+struct Ctx {
+    store: ClaudeStore,
+    commits: CommitStore,
+}
+
+fn now_iso() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+fn new_session_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
+    let home = dirs::home_dir().ok_or(CliError::from("cannot locate home directory"))?;
+    // Env overrides make the homes relocatable (and let tests run isolated).
+    let claude_home = std::env::var_os("SILY_CLAUDE_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"));
+    let sily_home = std::env::var_os("SILY_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".sily"));
+    let cwd = match cwd_override {
+        Some(c) => c,
+        None => std::env::current_dir()?.to_string_lossy().into_owned(),
+    };
+    Ok(Ctx {
+        store: ClaudeStore::new(claude_home, cwd),
+        commits: CommitStore::new(sily_home),
+    })
+}
+
+/// Resolve the "HEAD" of a session: its last message.
+fn head_uuid(session: &sily_core::model::Session) -> Result<String, CliError> {
+    session
+        .messages
+        .last()
+        .map(|m| m.uuid.clone())
+        .ok_or_else(|| CliError::from("session has no messages"))
+}
+
+fn run(cli: Cli) -> Result<(), CliError> {
+    let ctx = build_ctx(cli.cwd)?;
+    match cli.cmd {
+        Cmd::List => {
+            let mut refs = ctx.store.list()?;
+            refs.sort_by(|a, b| a.id.cmp(&b.id));
+            if refs.is_empty() {
+                println!("(no sessions in this project)");
+            }
+            for r in refs {
+                println!("{}  {}", &r.id[..r.id.len().min(8)], r.summary);
+            }
+        }
+
+        Cmd::Log { session } => {
+            let s = ctx.store.load(&session)?;
+            print!("{}", render::log(&s));
+        }
+
+        Cmd::Tree { session } => {
+            let s = ctx.store.load(&session)?;
+            print!("{}", render::tree(&s));
+        }
+
+        Cmd::Commit {
+            session,
+            name,
+            message,
+            at,
+        } => {
+            let s = ctx.store.load(&session)?;
+            let msg_uuid = match at {
+                Some(u) => {
+                    if s.message(&u).is_none() {
+                        return Err(CliError::Msg(format!("message {u} not found in session")));
+                    }
+                    u
+                }
+                None => head_uuid(&s)?,
+            };
+            let existing = ctx.commits.all()?;
+            let name = name.unwrap_or_else(|| format!("c{}", existing.len() + 1));
+            let commit = Commit {
+                name: name.clone(),
+                session_id: session,
+                message_uuid: msg_uuid.clone(),
+                created_at: now_iso(),
+                note: message,
+            };
+            ctx.commits.add(commit)?;
+            println!("committed '{}' at {}", name, &msg_uuid[..msg_uuid.len().min(8)]);
+        }
+
+        Cmd::Commits => {
+            let all = ctx.commits.all()?;
+            if all.is_empty() {
+                println!("(no commits yet)");
+            }
+            for c in all {
+                let note = c.note.as_deref().unwrap_or("");
+                println!(
+                    "{:<12} {} @ {}  {}",
+                    c.name,
+                    &c.session_id[..c.session_id.len().min(8)],
+                    &c.message_uuid[..c.message_uuid.len().min(8)],
+                    note
+                );
+            }
+        }
+
+        Cmd::Branch { session, at } => {
+            let s = ctx.store.load(&session)?;
+            let at = match at {
+                Some(u) => u,
+                None => head_uuid(&s)?,
+            };
+            let new_id = new_session_id();
+            let branched = branch_at(&s, &at, new_id.clone())?;
+            ctx.store.save(&branched)?;
+            println!("created session {new_id}");
+            println!("  {} messages, branched at {}", branched.messages.len(), &at[..at.len().min(8)]);
+            println!("  resume with:  claude --resume {new_id}");
+        }
+
+        Cmd::Revert { commit, hard } => {
+            let c = ctx
+                .commits
+                .find(&commit)
+                ?
+                .ok_or_else(|| format!("no such commit: {commit}"))?;
+            let s = ctx.store.load(&c.session_id)?;
+            if hard {
+                let reset = truncate_at(&s, &c.message_uuid)?;
+                ctx.store.save(&reset)?;
+                println!(
+                    "hard-reset session {} to commit '{}' ({} messages kept)",
+                    &c.session_id[..c.session_id.len().min(8)],
+                    c.name,
+                    reset.messages.len()
+                );
+            } else {
+                let new_id = new_session_id();
+                let forked =
+                    branch_at(&s, &c.message_uuid, new_id.clone())?;
+                ctx.store.save(&forked)?;
+                println!("reverted commit '{}' into new session {new_id}", c.name);
+                println!("  {} messages restored", forked.messages.len());
+                println!("  resume with:  claude --resume {new_id}");
+            }
+        }
+
+        Cmd::Diff { a, b } => {
+            let sa = ctx.store.load(&a)?;
+            let sb = ctx.store.load(&b)?;
+            let ha = head_uuid(&sa)?;
+            let hb = head_uuid(&sb)?;
+            let d = diff(&sa, &ha, &sb, &hb)?;
+            match &d.common_ancestor {
+                Some(anc) => println!(
+                    "common ancestor: {} ({} shared messages)",
+                    &anc[..anc.len().min(8)],
+                    d.common_len
+                ),
+                None => println!("no common ancestor"),
+            }
+            println!("only in {}: {} messages", &a[..a.len().min(8)], d.only_a.len());
+            println!("only in {}: {} messages", &b[..b.len().min(8)], d.only_b.len());
+        }
+    }
+    Ok(())
+}

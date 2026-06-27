@@ -1,0 +1,12 @@
+[package]
+name = "sily-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Provider-agnostic core for sily: canonical session model and branching operations."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
