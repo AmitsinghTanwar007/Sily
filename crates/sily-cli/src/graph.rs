@@ -111,17 +111,13 @@ pub fn session_graph(
     out.push_str(&format!(
         "{} {}\n",
         "▲".if_supports_color(Stdout, |t| t.magenta()),
-        format!("{} (main line)", short(id)).if_supports_color(Stdout, |t| t.style(Style::new().magenta().bold())),
+        format!("{} (main line · newest first)", short(id))
+            .if_supports_color(Stdout, |t| t.style(Style::new().magenta().bold())),
     ));
-    if start > 0 {
-        out.push_str(&format!(
-            "{}\n",
-            format!("┆ … {start} earlier messages (use --full)").if_supports_color(Stdout, |t| t.dimmed())
-        ));
-    }
     let dim = |s: &str| s.if_supports_color(Stdout, |t| t.dimmed()).to_string();
-    for (i, m) in msgs[start..].iter().enumerate() {
-        let is_last = start + i == msgs.len() - 1;
+    // Newest first: head at top, older below.
+    let win = &msgs[start..];
+    for (k, m) in win.iter().rev().enumerate() {
         out.push_str(&format!(
             "{} {}  {}  {}\n",
             "●".if_supports_color(Stdout, |t| t.bright_yellow()),
@@ -130,13 +126,16 @@ pub fn session_graph(
             truncate(&m.text, 56),
         ));
         for c in commit_at.get(m.point.as_str()).into_iter().flatten() {
-            let note = c.note.as_deref().unwrap_or("");
+            let note = match c.note.as_deref() {
+                Some(n) if !n.is_empty() => format!("  \"{n}\""),
+                _ => String::new(),
+            };
             out.push_str(&format!(
-                "{}{} {}  {}\n",
+                "{}{} {}{}\n",
                 dim("├─"),
                 "◆".if_supports_color(Stdout, |t| t.green()),
                 c.name.if_supports_color(Stdout, |t| t.style(Style::new().green().bold())),
-                format!("\"{note}\"").if_supports_color(Stdout, |t| t.dimmed()),
+                note.if_supports_color(Stdout, |t| t.dimmed()),
             ));
         }
         for b in branch_at.get(m.point.as_str()).into_iter().flatten() {
@@ -148,9 +147,15 @@ pub fn session_graph(
                 b.origin.if_supports_color(Stdout, |t| t.cyan()),
             ));
         }
-        if !is_last {
+        if k != win.len() - 1 {
             out.push_str(&format!("{}\n", dim("│")));
         }
+    }
+    if start > 0 {
+        out.push_str(&format!(
+            "{}\n",
+            format!("┆ … {start} earlier messages (use --full)").if_supports_color(Stdout, |t| t.dimmed())
+        ));
     }
     out
 }

@@ -323,20 +323,53 @@ impl<'a> App<'a> {
         self.selected_node().and_then(|id| self.tree.nodes[id].session_id.clone())
     }
 
-    /// Compute (and cache) the rail graph lines for a session id.
+    /// Compute (and cache) the swimlane graph lines for a session id: the main
+    /// timeline with each branch's divergent messages shown in a parallel lane.
     fn ensure_detail(&mut self, id: &str) {
         if self.detail.contains_key(id) {
             return;
         }
-        let lines = match self.providers.iter().map(|b| b.as_ref()).find(|p| p.owns(id)) {
-            Some(p) => match p.messages(id) {
-                Ok(msgs) => rail_lines(&msgs, self.commits, self.branches, id),
-                Err(e) => vec![Line::from(format!("error: {e}"))],
-            },
-            None => vec![Line::from("(no provider for this session)")],
+        let provider = self.providers.iter().map(|b| b.as_ref()).find(|p| p.owns(id));
+        let lines = match provider.and_then(|p| p.messages(id).ok()) {
+            Some(main_msgs) => {
+                let last_point = main_msgs.last().map(|m| m.point.clone()).unwrap_or_default();
+                let mut branch_at: BTreeMap<String, Vec<BranchLane>> = BTreeMap::new();
+                for b in self.branches.iter().filter(|b| b.from_session == id) {
+                    let bm = self
+                        .providers
+                        .iter()
+                        .map(|x| x.as_ref())
+                        .find(|x| x.owns(&b.session_id))
+                        .and_then(|x| x.messages(&b.session_id).ok())
+                        .unwrap_or_default();
+                    // the branch's divergent work = its messages after the shared prefix
+                    let common = main_msgs
+                        .iter()
+                        .zip(bm.iter())
+                        .take_while(|(a, c)| a.role == c.role && a.text == c.text)
+                        .count();
+                    let tail: Vec<MsgPoint> = bm.into_iter().skip(common).collect();
+                    let key = if b.at_message.is_empty() { last_point.clone() } else { b.at_message.clone() };
+                    branch_at.entry(key).or_default().push(BranchLane {
+                        id: short(&b.session_id).to_string(),
+                        origin: b.origin.clone(),
+                        tail,
+                    });
+                }
+                rail_lines(id, &main_msgs, self.commits, &branch_at)
+            }
+            None => vec![Line::from("(no messages)")],
         };
         self.detail.insert(id.to_string(), lines);
     }
+}
+
+/// A branch shown in a parallel lane: its id, how it was made, and its work
+/// after the fork point.
+struct BranchLane {
+    id: String,
+    origin: String,
+    tail: Vec<MsgPoint>,
 }
 
 fn role_lbl(r: Role) -> &'static str {
@@ -348,60 +381,95 @@ fn role_lbl(r: Role) -> &'static str {
     }
 }
 
-/// Build the rail-graph lines (●─│ trunk with ◆ commits / ○ branches splitting
-/// off at their point) for the detail pane.
+/// Build the swimlane graph lines for the detail pane: the main timeline
+/// **newest-first** (head at top), with each branch's divergent messages shown in
+/// a parallel lane diverging at the fork point.
 fn rail_lines(
-    msgs: &[MsgPoint],
-    commits: &[Commit],
-    branches: &[BranchRecord],
     id: &str,
+    main: &[MsgPoint],
+    commits: &[Commit],
+    branch_at: &BTreeMap<String, Vec<BranchLane>>,
 ) -> Vec<Line<'static>> {
     let yellow = Style::default().fg(Color::Yellow);
     let ybold = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
     let dim = Style::default().fg(Color::DarkGray);
     let green = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
     let cyan = Style::default().fg(Color::Cyan);
+    let cyanb = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
 
-    if msgs.is_empty() {
-        return vec![Line::from("(no messages)")];
+    let mut out = vec![
+        Line::from(vec![
+            Span::styled("▌ ", Style::default().fg(Color::Magenta)),
+            Span::styled(short(id).to_string(), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::styled("  · newest first", dim),
+        ]),
+        Line::from(""),
+    ];
+    if main.is_empty() {
+        out.push(Line::from("(no messages)"));
+        return out;
     }
-    let last = msgs.last().map(|m| m.point.clone()).unwrap_or_default();
+    let last = main.last().map(|m| m.point.clone()).unwrap_or_default();
 
     let mut commit_at: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for c in commits.iter().filter(|c| c.session_id == id) {
         let key = if c.message_uuid.is_empty() { last.clone() } else { c.message_uuid.clone() };
-        commit_at.entry(key).or_default().push(format!("{}  \"{}\"", c.name, c.note.clone().unwrap_or_default()));
-    }
-    let mut branch_at: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for b in branches.iter().filter(|b| b.from_session == id) {
-        let key = if b.at_message.is_empty() { last.clone() } else { b.at_message.clone() };
-        branch_at.entry(key).or_default().push(format!("{}  {}", short(&b.session_id), b.origin));
+        let label = match c.note.as_deref() {
+            Some(n) if !n.is_empty() => format!("{}  \"{}\"", c.name, n),
+            _ => c.name.clone(),
+        };
+        commit_at.entry(key).or_default().push(label);
     }
 
-    let start = msgs.len().saturating_sub(40);
-    let mut out = Vec::new();
-    if start > 0 {
-        out.push(Line::styled(format!("┆ … {start} earlier"), dim));
-    }
-    for (i, m) in msgs[start..].iter().enumerate() {
-        let is_last = start + i == msgs.len() - 1;
+    let start = main.len().saturating_sub(30);
+    let win = &main[start..];
+    for (k, m) in win.iter().rev().enumerate() {
         out.push(Line::from(vec![
             Span::styled("● ", yellow),
             Span::styled(short(&m.point).to_string(), ybold),
             Span::raw("  "),
             Span::styled(role_lbl(m.role), dim),
             Span::raw("  "),
-            Span::raw(truncate(&m.text, 44)),
+            Span::raw(truncate(&m.text, 40)),
         ]));
         for c in commit_at.get(&m.point).into_iter().flatten() {
-            out.push(Line::from(vec![Span::styled("├─◆ ", green), Span::styled(c.clone(), green)]));
+            out.push(Line::from(vec![
+                Span::styled("│ ", dim),
+                Span::styled("◆ ", green),
+                Span::styled(c.clone(), green),
+            ]));
         }
-        for b in branch_at.get(&m.point).into_iter().flatten() {
-            out.push(Line::from(vec![Span::styled("├─○ ", cyan), Span::styled(b.clone(), cyan)]));
+        for lane in branch_at.get(&m.point).into_iter().flatten() {
+            out.push(Line::from(vec![
+                Span::styled("│ ", dim),
+                Span::styled("╰─○ ", cyan),
+                Span::styled(lane.id.clone(), cyanb),
+                Span::styled(format!("  {}", lane.origin), dim),
+            ]));
+            if lane.tail.is_empty() {
+                out.push(Line::from(vec![Span::styled("│    (no new work yet)", dim)]));
+            } else {
+                for t in lane.tail.iter().take(4) {
+                    out.push(Line::from(vec![
+                        Span::styled("│    ", dim),
+                        Span::styled("· ", cyan),
+                        Span::raw(truncate(&t.text, 32)),
+                    ]));
+                }
+                if lane.tail.len() > 4 {
+                    out.push(Line::from(vec![Span::styled(
+                        format!("│    … {} more", lane.tail.len() - 4),
+                        dim,
+                    )]));
+                }
+            }
         }
-        if !is_last {
+        if k != win.len() - 1 {
             out.push(Line::styled("│", dim));
         }
+    }
+    if start > 0 {
+        out.push(Line::styled(format!("┆ … {start} earlier"), dim));
     }
     out
 }
