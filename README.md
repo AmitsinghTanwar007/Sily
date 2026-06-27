@@ -62,9 +62,9 @@ is ever lost.
 |---------|--------------|
 | `sily list` | Interactive tree of sessions under the current directory (static when piped) |
 | `sily list --all` | Every project on the machine |
-| `sily log <session>` | Show a session's messages |
+| `sily log <session>` | Show recent messages (last 8; `--full` for all) |
 | `sily log <session> -p` | Show only *your* prompts (skip assistant/tools/noise) |
-| `sily tree <session>` | Show a session's branch structure |
+| `sily tree <session>` | Show recent branch structure (last 8; `--full` for all) |
 | `sily commit <session> [-m note] [--name x] [--at <msg>]` | Save a point you can return to |
 | `sily commits` | List your saved points |
 | `sily branch <session> [--at <msg>]` | Make a new session from any point |

@@ -25,6 +25,9 @@ use sily_adapter_claude::ClaudeStore;
 use branchstore::BranchStore;
 use commitstore::CommitStore;
 
+/// Default number of recent entries shown by `log`/`tree` (override with --full).
+const DEFAULT_LIMIT: usize = 8;
+
 /// One error type for the CLI. `From` impls let command code use `?` directly
 /// instead of stringifying every fallible call.
 #[derive(Debug)]
@@ -88,15 +91,23 @@ enum Cmd {
         #[arg(long)]
         all: bool,
     },
-    /// Print the linear history of a session.
+    /// Print the linear history of a session (last 8 entries by default).
     Log {
         session: String,
         /// Show only the user's prompts (skip assistant turns, tools, noise).
         #[arg(short, long)]
         prompts: bool,
+        /// Show the full history instead of just the last few entries.
+        #[arg(short, long)]
+        full: bool,
     },
-    /// Show the branch tree of a session.
-    Tree { session: String },
+    /// Show the branch tree of a session (last 8 entries by default).
+    Tree {
+        session: String,
+        /// Show the full tree instead of just the last few entries.
+        #[arg(short, long)]
+        full: bool,
+    },
     /// Save a commit (a named pointer) at a session's HEAD or a chosen message.
     Commit {
         session: String,
@@ -244,37 +255,62 @@ fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
     })
 }
 
-/// Print only the user's real prompts from (role, text) pairs, numbered.
-fn print_user_prompts(points: impl Iterator<Item = (String, String)>) {
-    let mut n = 0;
-    for (role, text) in points {
-        if role == "user" && render::is_real_prompt(&text) {
-            n += 1;
-            let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
-            println!("{n:>3}. {one_line}");
-        }
-    }
-    if n == 0 {
+/// Print only the user's real prompts from (role, text) pairs, numbered, with an
+/// optional last-N limit.
+fn print_user_prompts(points: Vec<(String, String)>, limit: Option<usize>) {
+    let prompts: Vec<String> = points
+        .into_iter()
+        .filter(|(role, text)| role == "user" && render::is_real_prompt(text))
+        .map(|(_, text)| text.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    if prompts.is_empty() {
         println!("(no user prompts)");
+        return;
+    }
+    let start = match limit {
+        Some(n) if prompts.len() > n => prompts.len() - n,
+        _ => 0,
+    };
+    if start > 0 {
+        println!("… {start} earlier prompts (use --full to see all)");
+    }
+    for (i, p) in prompts[start..].iter().enumerate() {
+        println!("{:>3}. {p}", start + i + 1);
     }
 }
 
 /// Print Codex message points: a numbered list (use the number with `--at`).
-fn print_points(points: Vec<(usize, String, String)>) {
+fn print_points(points: Vec<(usize, String, String)>, limit: Option<usize>) {
     if points.is_empty() {
         println!("(no messages)");
+        return;
     }
-    for (n, role, snippet) in points {
+    let start = match limit {
+        Some(n) if points.len() > n => points.len() - n,
+        _ => 0,
+    };
+    if start > 0 {
+        println!("… {start} earlier messages (use --full to see all)");
+    }
+    for (n, role, snippet) in &points[start..] {
         println!("{n:>4}  {role:<9}  {snippet}");
     }
 }
 
 /// Print OpenCode message points: message id + role + snippet.
-fn print_oc_points(points: Vec<(String, String, String)>) {
+fn print_oc_points(points: Vec<(String, String, String)>, limit: Option<usize>) {
     if points.is_empty() {
         println!("(no messages)");
+        return;
     }
-    for (id, role, snippet) in points {
+    let start = match limit {
+        Some(n) if points.len() > n => points.len() - n,
+        _ => 0,
+    };
+    if start > 0 {
+        println!("… {start} earlier messages (use --full to see all)");
+    }
+    for (id, role, snippet) in &points[start..] {
         println!("{id}  {role:<9}  {snippet}");
     }
 }
@@ -352,42 +388,50 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
         }
 
-        Cmd::Log { session, prompts } => match detect_provider(&ctx, &session) {
-            "codex-cli" => {
-                let pts = sily_adapter_codex::message_points(&ctx.codex_home, &session)?;
-                if prompts {
-                    print_user_prompts(pts.into_iter().map(|(_, role, text)| (role, text)));
-                } else {
-                    print_points(pts);
+        Cmd::Log { session, prompts, full } => {
+            let limit = if full { None } else { Some(DEFAULT_LIMIT) };
+            match detect_provider(&ctx, &session) {
+                "codex-cli" => {
+                    let pts = sily_adapter_codex::message_points(&ctx.codex_home, &session)?;
+                    if prompts {
+                        print_user_prompts(pts.into_iter().map(|(_, r, t)| (r, t)).collect(), limit);
+                    } else {
+                        print_points(pts, limit);
+                    }
+                }
+                "opencode" => {
+                    let pts = sily_adapter_opencode::message_points(&session)?;
+                    if prompts {
+                        print_user_prompts(pts.into_iter().map(|(_, r, t)| (r, t)).collect(), limit);
+                    } else {
+                        print_oc_points(pts, limit);
+                    }
+                }
+                _ => {
+                    let s = claude_store_for(&ctx, &session)?.load(&session)?;
+                    if prompts {
+                        print!("{}", render::prompts(&s, limit));
+                    } else {
+                        print!("{}", render::log(&s, limit));
+                    }
                 }
             }
-            "opencode" => {
-                let pts = sily_adapter_opencode::message_points(&session)?;
-                if prompts {
-                    print_user_prompts(pts.into_iter().map(|(_, role, text)| (role, text)));
-                } else {
-                    print_oc_points(pts);
-                }
-            }
-            _ => {
-                let s = claude_store_for(&ctx, &session)?.load(&session)?;
-                if prompts {
-                    print!("{}", render::prompts(&s));
-                } else {
-                    print!("{}", render::log(&s));
-                }
-            }
-        },
+        }
 
-        Cmd::Tree { session } => match detect_provider(&ctx, &session) {
-            // codex/opencode are linear append-logs (no in-file branch tree).
-            "codex-cli" => print_points(sily_adapter_codex::message_points(&ctx.codex_home, &session)?),
-            "opencode" => print_oc_points(sily_adapter_opencode::message_points(&session)?),
-            _ => {
-                let s = claude_store_for(&ctx, &session)?.load(&session)?;
-                print!("{}", render::tree(&s));
+        Cmd::Tree { session, full } => {
+            let limit = if full { None } else { Some(DEFAULT_LIMIT) };
+            match detect_provider(&ctx, &session) {
+                // codex/opencode are linear append-logs (no in-file branch tree).
+                "codex-cli" => {
+                    print_points(sily_adapter_codex::message_points(&ctx.codex_home, &session)?, limit)
+                }
+                "opencode" => print_oc_points(sily_adapter_opencode::message_points(&session)?, limit),
+                _ => {
+                    let s = claude_store_for(&ctx, &session)?.load(&session)?;
+                    print!("{}", render::tree(&s, limit));
+                }
             }
-        },
+        }
 
         Cmd::Commit {
             session,
