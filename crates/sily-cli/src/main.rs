@@ -301,8 +301,8 @@ fn cmd_list(ctx: &Ctx, all: bool) -> Result<(), CliError> {
             println!("(no sessions under {} — use 'sily list --all' to see every project)", ctx.cwd);
         }
     } else if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-        if let Some(cmd) =
-            tui::run(&providers, &commits, &branches).map_err(|e| CliError::Msg(e.to_string()))?
+        if let Some(cmd) = tui::run(&providers, &ctx.providers, &commits, &branches)
+            .map_err(|e| CliError::Msg(e.to_string()))?
         {
             println!("{cmd}");
         }
@@ -353,7 +353,8 @@ fn cmd_commits(ctx: &Ctx) -> Result<(), CliError> {
     if all.is_empty() {
         println!("(no commits yet)");
     }
-    for c in all {
+    // Newest first.
+    for c in all.into_iter().rev() {
         println!(
             "{:<14} {} @ {}  {}",
             c.name,
@@ -518,11 +519,12 @@ fn print_messages(msgs: Vec<MsgPoint>, limit: Option<usize>) {
         Some(n) if msgs.len() > n => msgs.len() - n,
         _ => 0,
     };
+    // Newest first.
+    for m in msgs[start..].iter().rev() {
+        println!("{:<8}  {}  {}", short(&m.point), role_label(m.role), clip(&m.text, 80));
+    }
     if start > 0 {
         println!("… {start} earlier messages (use --full to see all)");
-    }
-    for m in &msgs[start..] {
-        println!("{:<8}  {}  {}", short(&m.point), role_label(m.role), clip(&m.text, 80));
     }
 }
 
@@ -541,11 +543,12 @@ fn print_prompts(msgs: Vec<MsgPoint>, limit: Option<usize>) {
         Some(n) if prompts.len() > n => prompts.len() - n,
         _ => 0,
     };
+    // Newest first (numbers keep their original order).
+    for (i, p) in prompts[start..].iter().enumerate().rev() {
+        println!("{:>3}. {}", start + i + 1, clip(p, 100));
+    }
     if start > 0 {
         println!("… {start} earlier prompts (use --full to see all)");
-    }
-    for (i, p) in prompts[start..].iter().enumerate() {
-        println!("{:>3}. {}", start + i + 1, clip(p, 100));
     }
 }
 

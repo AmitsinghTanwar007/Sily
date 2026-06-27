@@ -75,9 +75,12 @@ is ever lost.
 | `sily port <session>` | Copy a session's content into a new session in **another** tool (prompts for the target) |
 | `sily update` | Update sily to the latest release |
 
-In the interactive `sily list` (in a terminal): `↑`/`↓` move, `→`/`Enter` expand
-(everything starts collapsed), `←` collapse, `y` copy the selected session's resume
-command (the right one for its tool), `q` quit.
+In the interactive `sily list` (in a terminal): browse the tree on the left and the
+**selected session's rail graph** (timeline + branches/commits) shows on the right.
+Keys: `↑`/`↓` move, `→`/`Enter` expand (everything starts collapsed), `←` collapse,
+`y` copy the selected session's resume command, `q` quit.
+
+Lists show **newest first** (`sily commits`, `sily log`).
 
 Tips:
 - A **commit** is just a tiny bookmark (a pointer), not a copy — save as many as you like.

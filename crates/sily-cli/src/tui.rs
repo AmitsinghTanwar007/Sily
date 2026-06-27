@@ -14,7 +14,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
-use sily_core::model::{BranchRecord, Commit};
+use sily_core::model::{BranchRecord, Commit, Role};
+use sily_core::provider::{MsgPoint, Provider};
 use sily_core::store::{ProjectSessions, SessionRef};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -33,6 +34,8 @@ struct Node {
     meta: String,
     /// The full resume command for this node, if it's a resumable session.
     resume: Option<String>,
+    /// Full session id (for Session nodes) — used to render the detail rail.
+    session_id: Option<String>,
     children: Vec<usize>,
 }
 
@@ -105,6 +108,7 @@ fn build_tree(
             secondary: String::new(),
             meta: format!("{total} sessions"),
             resume: None,
+            session_id: None,
             children: Vec::new(),
         });
         tree.roots.push(adapter);
@@ -154,6 +158,7 @@ fn convert_dir(
         secondary: String::new(),
         meta: format!("{total_sessions} sessions"),
         resume: None,
+        session_id: None,
         children,
     })
 }
@@ -178,6 +183,7 @@ fn convert_session(
             secondary: if note.is_empty() { String::new() } else { format!("\"{note}\"") },
             meta: String::new(),
             resume: None,
+            session_id: None,
             children: Vec::new(),
         }));
     }
@@ -190,6 +196,7 @@ fn convert_session(
             secondary: format!("{} (from {})", b.origin, from),
             meta: String::new(),
             resume: Some(resume_command("claude-code", &b.session_id)),
+            session_id: Some(b.session_id.clone()),
             children: Vec::new(),
         }));
     }
@@ -199,23 +206,33 @@ fn convert_session(
         secondary: truncate(&s.summary, 60),
         meta: meta_line(s.message_count, s.modified),
         resume: Some(resume_command(provider, &s.id)),
+        session_id: Some(s.id.clone()),
         children,
     })
 }
 
 // ---------------------------------------------------------------- app / loop
 
-struct App {
+struct App<'a> {
     tree: Tree,
     expanded: HashSet<usize>,
     visible: Vec<(usize, usize)>, // (node id, depth)
     sel: usize,
     status: String,
     picked: Option<String>,
+    providers: &'a [Box<dyn Provider>],
+    commits: &'a [Commit],
+    branches: &'a [BranchRecord],
+    detail: std::collections::HashMap<String, Vec<Line<'static>>>,
 }
 
-impl App {
-    fn new(tree: Tree) -> Self {
+impl<'a> App<'a> {
+    fn new(
+        tree: Tree,
+        providers: &'a [Box<dyn Provider>],
+        commits: &'a [Commit],
+        branches: &'a [BranchRecord],
+    ) -> Self {
         let mut app = App {
             tree,
             expanded: HashSet::new(),
@@ -223,6 +240,10 @@ impl App {
             sel: 0,
             status: String::new(),
             picked: None,
+            providers,
+            commits,
+            branches,
+            detail: std::collections::HashMap::new(),
         };
         // start with the adapter expanded so top-level dirs are visible
         for &r in &app.tree.roots {
@@ -297,21 +318,109 @@ impl App {
             }
         }
     }
+
+    fn selected_session_id(&self) -> Option<String> {
+        self.selected_node().and_then(|id| self.tree.nodes[id].session_id.clone())
+    }
+
+    /// Compute (and cache) the rail graph lines for a session id.
+    fn ensure_detail(&mut self, id: &str) {
+        if self.detail.contains_key(id) {
+            return;
+        }
+        let lines = match self.providers.iter().map(|b| b.as_ref()).find(|p| p.owns(id)) {
+            Some(p) => match p.messages(id) {
+                Ok(msgs) => rail_lines(&msgs, self.commits, self.branches, id),
+                Err(e) => vec![Line::from(format!("error: {e}"))],
+            },
+            None => vec![Line::from("(no provider for this session)")],
+        };
+        self.detail.insert(id.to_string(), lines);
+    }
+}
+
+fn role_lbl(r: Role) -> &'static str {
+    match r {
+        Role::User => "user",
+        Role::Assistant => "asst",
+        Role::System => "sys ",
+        Role::Other => "····",
+    }
+}
+
+/// Build the rail-graph lines (●─│ trunk with ◆ commits / ○ branches splitting
+/// off at their point) for the detail pane.
+fn rail_lines(
+    msgs: &[MsgPoint],
+    commits: &[Commit],
+    branches: &[BranchRecord],
+    id: &str,
+) -> Vec<Line<'static>> {
+    let yellow = Style::default().fg(Color::Yellow);
+    let ybold = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(Color::DarkGray);
+    let green = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
+    let cyan = Style::default().fg(Color::Cyan);
+
+    if msgs.is_empty() {
+        return vec![Line::from("(no messages)")];
+    }
+    let last = msgs.last().map(|m| m.point.clone()).unwrap_or_default();
+
+    let mut commit_at: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for c in commits.iter().filter(|c| c.session_id == id) {
+        let key = if c.message_uuid.is_empty() { last.clone() } else { c.message_uuid.clone() };
+        commit_at.entry(key).or_default().push(format!("{}  \"{}\"", c.name, c.note.clone().unwrap_or_default()));
+    }
+    let mut branch_at: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for b in branches.iter().filter(|b| b.from_session == id) {
+        let key = if b.at_message.is_empty() { last.clone() } else { b.at_message.clone() };
+        branch_at.entry(key).or_default().push(format!("{}  {}", short(&b.session_id), b.origin));
+    }
+
+    let start = msgs.len().saturating_sub(40);
+    let mut out = Vec::new();
+    if start > 0 {
+        out.push(Line::styled(format!("┆ … {start} earlier"), dim));
+    }
+    for (i, m) in msgs[start..].iter().enumerate() {
+        let is_last = start + i == msgs.len() - 1;
+        out.push(Line::from(vec![
+            Span::styled("● ", yellow),
+            Span::styled(short(&m.point).to_string(), ybold),
+            Span::raw("  "),
+            Span::styled(role_lbl(m.role), dim),
+            Span::raw("  "),
+            Span::raw(truncate(&m.text, 44)),
+        ]));
+        for c in commit_at.get(&m.point).into_iter().flatten() {
+            out.push(Line::from(vec![Span::styled("├─◆ ", green), Span::styled(c.clone(), green)]));
+        }
+        for b in branch_at.get(&m.point).into_iter().flatten() {
+            out.push(Line::from(vec![Span::styled("├─○ ", cyan), Span::styled(b.clone(), cyan)]));
+        }
+        if !is_last {
+            out.push(Line::styled("│", dim));
+        }
+    }
+    out
 }
 
 pub fn run(
-    providers: &[(String, Vec<ProjectSessions>)],
+    listings: &[(String, Vec<ProjectSessions>)],
+    registry: &[Box<dyn Provider>],
     commits: &[Commit],
     branches: &[BranchRecord],
 ) -> std::io::Result<Option<String>> {
-    let mut app = App::new(build_tree(providers, commits, branches));
+    let tree = build_tree(listings, commits, branches);
+    let mut app = App::new(tree, registry, commits, branches);
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &mut app);
     ratatui::restore();
     result.map(|_| app.picked)
 }
 
-fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> std::io::Result<()> {
+fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App<'_>) -> std::io::Result<()> {
     loop {
         terminal.draw(|f| draw(f, app))?;
         if let Event::Key(key) = event::read()? {
@@ -342,34 +451,58 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> std::io
     Ok(())
 }
 
-fn draw(f: &mut ratatui::Frame, app: &mut App) {
-    let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(f.area());
+fn draw(f: &mut ratatui::Frame, app: &mut App<'_>) {
+    let outer = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(f.area());
+    let body = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).split(outer[0]);
 
+    // Left: the collapsible tree.
     let items: Vec<ListItem> = app
         .visible
         .iter()
         .map(|&(id, depth)| row(app, id, depth))
         .collect();
-
     let list = List::new(items)
-        .block(Block::default().borders(Borders::BOTTOM).title(" sily "))
+        .block(Block::default().borders(Borders::RIGHT).title(" sily "))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     let mut state = ListState::default();
     state.select(Some(app.sel));
-    f.render_stateful_widget(list, chunks[0], &mut state);
+    f.render_stateful_widget(list, body[0], &mut state);
+
+    // Right: the selected session's rail graph.
+    let sid = app.selected_session_id();
+    let (title, detail): (String, Vec<Line>) = match &sid {
+        Some(id) => {
+            app.ensure_detail(id);
+            (
+                format!(" graph: {} ", &id[..id.len().min(8)]),
+                app.detail.get(id).cloned().unwrap_or_default(),
+            )
+        }
+        None => (
+            " graph ".to_string(),
+            vec![Line::styled(
+                "select a session to see its graph",
+                Style::default().fg(Color::DarkGray),
+            )],
+        ),
+    };
+    f.render_widget(
+        Paragraph::new(detail).block(Block::default().borders(Borders::LEFT).title(title)),
+        body[1],
+    );
 
     let hint = if app.status.is_empty() {
-        "↑↓ move   →/Enter expand   ← collapse   y copy resume   q quit".to_string()
+        "↑↓ move · →/Enter expand · ← collapse · y copy resume · q quit".to_string()
     } else {
         app.status.clone()
     };
     f.render_widget(
         Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
-        chunks[1],
+        outer[1],
     );
 }
 
-fn row<'a>(app: &App, id: usize, depth: usize) -> ListItem<'a> {
+fn row<'a>(app: &App<'_>, id: usize, depth: usize) -> ListItem<'a> {
     let node = &app.tree.nodes[id];
     let has_children = !node.children.is_empty();
     let marker = if has_children {
