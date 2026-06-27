@@ -162,6 +162,18 @@ fn gather_providers(ctx: &Ctx) -> Vec<(String, Vec<sily_core::store::ProjectSess
     out
 }
 
+/// Which provider owns a session id. OpenCode ids start with `ses_`; a Codex id
+/// matches a rollout file; otherwise it's treated as Claude Code.
+fn detect_provider(ctx: &Ctx, id: &str) -> &'static str {
+    if id.starts_with("ses_") {
+        "opencode"
+    } else if sily_adapter_codex::find_session_file(&ctx.codex_home, id).is_some() {
+        "codex-cli"
+    } else {
+        "claude-code"
+    }
+}
+
 fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
@@ -197,6 +209,35 @@ fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
         codex_home,
         opencode_db,
     })
+}
+
+/// Parse an optional Codex branch point ("3" → message #3; None → whole session).
+fn parse_index(at: Option<&str>) -> Result<Option<usize>, CliError> {
+    match at {
+        None => Ok(None),
+        Some(s) => s
+            .parse::<usize>()
+            .map(Some)
+            .map_err(|_| CliError::Msg(format!("--at for codex must be a message number, got '{s}'"))),
+    }
+}
+
+/// Print the result of an OpenCode branch (the new id may be undetectable).
+fn print_opencode_branch(b: &sily_adapter_opencode::Branched) {
+    match (&b.new_id, &b.resume) {
+        (Some(id), Some(resume)) => {
+            println!("created opencode session {id}");
+            println!("  {} messages", b.kept_messages);
+            println!("  resume with:  {resume}");
+        }
+        _ => {
+            println!(
+                "opencode import completed ({} messages), but the new session id wasn't detected.",
+                b.kept_messages
+            );
+            println!("  run 'sily list' to find it, then: opencode --session <id>");
+        }
+    }
 }
 
 /// Resolve the "HEAD" of a session: its last message.
@@ -252,15 +293,25 @@ fn run(cli: Cli) -> Result<(), CliError> {
             message,
             at,
         } => {
-            let s = ctx.store.load(&session)?;
-            let msg_uuid = match at {
-                Some(u) => {
-                    if s.message(&u).is_none() {
-                        return Err(CliError::Msg(format!("message {u} not found in session")));
+            // Claude validates the message against the loaded session; for codex
+            // (index) / opencode (message id) the point is stored as given
+            // (empty = HEAD / whole session).
+            let msg_uuid = match detect_provider(&ctx, &session) {
+                "claude-code" => {
+                    let s = ctx.store.load(&session)?;
+                    match at {
+                        Some(u) => {
+                            if s.message(&u).is_none() {
+                                return Err(CliError::Msg(format!(
+                                    "message {u} not found in session"
+                                )));
+                            }
+                            u
+                        }
+                        None => head_uuid(&s)?,
                     }
-                    u
                 }
-                None => head_uuid(&s)?,
+                _ => at.unwrap_or_default(),
             };
             let existing = ctx.commits.all()?;
             let name = name.unwrap_or_else(|| format!("c{}", existing.len() + 1));
@@ -272,7 +323,12 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 note: message,
             };
             ctx.commits.add(commit)?;
-            println!("committed '{}' at {}", name, &msg_uuid[..msg_uuid.len().min(8)]);
+            let at_label = if msg_uuid.is_empty() {
+                "HEAD".to_string()
+            } else {
+                msg_uuid.chars().take(8).collect()
+            };
+            println!("committed '{name}' at {at_label}");
         }
 
         Cmd::Commits => {
@@ -292,58 +348,97 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
         }
 
-        Cmd::Branch { session, at } => {
-            let s = ctx.store.load(&session)?;
-            let at = match at {
-                Some(u) => u,
-                None => head_uuid(&s)?,
-            };
-            let new_id = new_session_id();
-            let branched = branch_at(&s, &at, new_id.clone())?;
-            ctx.store.save(&branched)?;
-            ctx.branches.add(BranchRecord {
-                session_id: new_id.clone(),
-                from_session: session,
-                at_message: at.clone(),
-                origin: "branch".to_string(),
-                created_at: now_iso(),
-            })?;
-            println!("created session {new_id}");
-            println!("  {} messages, branched at {}", branched.messages.len(), &at[..at.len().min(8)]);
-            println!("  resume with:  claude --resume {new_id}");
-        }
+        Cmd::Branch { session, at } => match detect_provider(&ctx, &session) {
+            "codex-cli" => {
+                let at_idx = parse_index(at.as_deref())?;
+                let b = sily_adapter_codex::branch(&ctx.codex_home, &session, at_idx)?;
+                println!("created codex session {}", b.new_id);
+                println!("  {} messages", b.kept_messages);
+                println!("  resume with:  {}", b.resume);
+            }
+            "opencode" => {
+                let b = sily_adapter_opencode::branch(&session, at.as_deref())?;
+                print_opencode_branch(&b);
+            }
+            _ => {
+                let s = ctx.store.load(&session)?;
+                let at = match at {
+                    Some(u) => u,
+                    None => head_uuid(&s)?,
+                };
+                let new_id = new_session_id();
+                let branched = branch_at(&s, &at, new_id.clone())?;
+                ctx.store.save(&branched)?;
+                ctx.branches.add(BranchRecord {
+                    session_id: new_id.clone(),
+                    from_session: session,
+                    at_message: at.clone(),
+                    origin: "branch".to_string(),
+                    created_at: now_iso(),
+                })?;
+                println!("created session {new_id}");
+                println!("  {} messages, branched at {}", branched.messages.len(), &at[..at.len().min(8)]);
+                println!("  resume with:  claude --resume {new_id}");
+            }
+        },
 
         Cmd::Revert { commit, hard } => {
             let c = ctx
                 .commits
-                .find(&commit)
-                ?
+                .find(&commit)?
                 .ok_or_else(|| format!("no such commit: {commit}"))?;
-            let s = ctx.store.load(&c.session_id)?;
-            if hard {
-                let reset = truncate_at(&s, &c.message_uuid)?;
-                ctx.store.save(&reset)?;
-                println!(
-                    "hard-reset session {} to commit '{}' ({} messages kept)",
-                    &c.session_id[..c.session_id.len().min(8)],
-                    c.name,
-                    reset.messages.len()
-                );
-            } else {
-                let new_id = new_session_id();
-                let forked =
-                    branch_at(&s, &c.message_uuid, new_id.clone())?;
-                ctx.store.save(&forked)?;
-                ctx.branches.add(BranchRecord {
-                    session_id: new_id.clone(),
-                    from_session: c.session_id.clone(),
-                    at_message: c.message_uuid.clone(),
-                    origin: c.name.clone(),
-                    created_at: now_iso(),
-                })?;
-                println!("reverted commit '{}' into new session {new_id}", c.name);
-                println!("  {} messages restored", forked.messages.len());
-                println!("  resume with:  claude --resume {new_id}");
+            let point = if c.message_uuid.is_empty() { None } else { Some(c.message_uuid.as_str()) };
+            match detect_provider(&ctx, &c.session_id) {
+                "codex-cli" => {
+                    let at_idx = parse_index(point)?;
+                    if hard {
+                        let idx = at_idx.ok_or("commit has no point for --hard")?;
+                        let kept = sily_adapter_codex::truncate(&ctx.codex_home, &c.session_id, idx)?;
+                        println!("hard-reset codex session to commit '{}' ({kept} messages kept)", c.name);
+                    } else {
+                        let b = sily_adapter_codex::branch(&ctx.codex_home, &c.session_id, at_idx)?;
+                        println!("reverted commit '{}' into codex session {}", c.name, b.new_id);
+                        println!("  {} messages restored", b.kept_messages);
+                        println!("  resume with:  {}", b.resume);
+                    }
+                }
+                "opencode" => {
+                    if hard {
+                        return Err(CliError::Msg(
+                            "opencode --hard revert is not supported (branch is non-destructive)".into(),
+                        ));
+                    }
+                    let b = sily_adapter_opencode::branch(&c.session_id, point)?;
+                    println!("reverted commit '{}' via opencode import", c.name);
+                    print_opencode_branch(&b);
+                }
+                _ => {
+                    let s = ctx.store.load(&c.session_id)?;
+                    if hard {
+                        let reset = truncate_at(&s, &c.message_uuid)?;
+                        ctx.store.save(&reset)?;
+                        println!(
+                            "hard-reset session {} to commit '{}' ({} messages kept)",
+                            &c.session_id[..c.session_id.len().min(8)],
+                            c.name,
+                            reset.messages.len()
+                        );
+                    } else {
+                        let new_id = new_session_id();
+                        let forked = branch_at(&s, &c.message_uuid, new_id.clone())?;
+                        ctx.store.save(&forked)?;
+                        ctx.branches.add(BranchRecord {
+                            session_id: new_id.clone(),
+                            from_session: c.session_id.clone(),
+                            at_message: c.message_uuid.clone(),
+                            origin: c.name.clone(),
+                            created_at: now_iso(),
+                        })?;
+                        println!("reverted commit '{}' into new session {new_id}", c.name);
+                        println!("  {} messages restored", forked.messages.len());
+                        println!("  resume with:  claude --resume {new_id}");
+                    }
+                }
             }
         }
 

@@ -87,8 +87,14 @@ any API. Your commits live in `~/.sily/`.
 
 Built in Rust as a clean core + pluggable adapters. `sily list` shows sessions from
 **Claude Code**, **Codex CLI** (`~/.codex/sessions`), and **OpenCode** (its SQLite
-database) together in one tree. Commit / branch / revert currently target Claude Code
-sessions.
+database) together in one tree.
+
+Commit / branch / revert:
+- **Claude Code** — full support (writes a new `.jsonl`; `claude --resume`).
+- **Codex CLI** — full support (writes a new rollout; `codex resume`). Branch points
+  are message numbers (`--at 3`).
+- **OpenCode** — branch/revert via OpenCode's own `export`/`import` (no direct DB
+  writes); branch points are message ids. Experimental — verify the result.
 
 ---
 

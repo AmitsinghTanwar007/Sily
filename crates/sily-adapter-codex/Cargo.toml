@@ -9,3 +9,5 @@ description = "Codex CLI adapter for sily: reads ~/.codex/sessions rollout .json
 [dependencies]
 sily-core = { path = "../sily-core" }
 serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

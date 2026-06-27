@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use sily_core::error::Result;
+use sily_core::error::{Error, Result};
 use sily_core::model::SessionMeta;
 use sily_core::store::{ProjectSessions, SessionRef};
 
@@ -102,6 +102,155 @@ fn scan_session(path: &Path) -> Option<(String, SessionRef)> {
             meta: SessionMeta { cwd: Some(cwd), provider: Some(PROVIDER.to_string()) },
         },
     ))
+}
+
+/// Outcome of creating a branched Codex session.
+pub struct Branched {
+    pub new_id: String,
+    pub resume: String,
+    pub kept_messages: usize,
+}
+
+/// Locate the rollout file for a session id (matches `session_meta.payload.id`).
+pub fn find_session_file(codex_home: &Path, id: &str) -> Option<PathBuf> {
+    let mut files = Vec::new();
+    collect_jsonl(&codex_home.join("sessions"), &mut files);
+    files
+        .into_iter()
+        .find(|path| file_session_id(path).as_deref() == Some(id))
+}
+
+fn file_session_id(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    for line in text.lines() {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if v.get("type").and_then(Value::as_str) == Some("session_meta") {
+                return v
+                    .get("payload")
+                    .and_then(|p| p.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+            }
+        }
+    }
+    None
+}
+
+/// Index (1-based) → display snippet for each user/assistant message, so a caller
+/// can pick a branch point (Codex messages have no ids).
+pub fn message_points(codex_home: &Path, id: &str) -> Result<Vec<(usize, String, String)>> {
+    let path = find_session_file(codex_home, id)
+        .ok_or_else(|| Error::SessionNotFound(id.to_string()))?;
+    let text = fs::read_to_string(&path)?;
+    let mut points = Vec::new();
+    let mut idx = 0;
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if is_message(&v) {
+            idx += 1;
+            let p = v.get("payload");
+            let role = p.and_then(|p| p.get("role")).and_then(Value::as_str).unwrap_or("").to_string();
+            let snippet: String = p
+                .and_then(|p| p.get("content"))
+                .map(extract_text)
+                .unwrap_or_default()
+                .chars()
+                .take(60)
+                .collect();
+            points.push((idx, role, snippet));
+        }
+    }
+    Ok(points)
+}
+
+fn is_message(v: &Value) -> bool {
+    v.get("type").and_then(Value::as_str) == Some("response_item")
+        && v.get("payload").and_then(|p| p.get("type")).and_then(Value::as_str) == Some("message")
+        && matches!(
+            v.get("payload").and_then(|p| p.get("role")).and_then(Value::as_str),
+            Some("user") | Some("assistant")
+        )
+}
+
+/// Slice the raw record stream up to (and including) the `at`-th message (1-based;
+/// `None` = the whole session). Returns the kept raw lines and message count.
+fn slice_lines(text: &str, at: Option<usize>) -> (Vec<String>, usize) {
+    let mut out = Vec::new();
+    let mut msgs = 0;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        out.push(line.to_string());
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if is_message(&v) {
+                msgs += 1;
+                if Some(msgs) == at {
+                    break;
+                }
+            }
+        }
+    }
+    (out, msgs)
+}
+
+/// Create a NEW Codex session branched from `id` at the `at`-th message
+/// (`None` = copy the whole session). Writes a fresh rollout file with a new id.
+pub fn branch(codex_home: &Path, id: &str, at: Option<usize>) -> Result<Branched> {
+    let path = find_session_file(codex_home, id)
+        .ok_or_else(|| Error::SessionNotFound(id.to_string()))?;
+    let text = fs::read_to_string(&path)?;
+    let (mut lines, kept) = slice_lines(&text, at);
+
+    let new_id = uuid::Uuid::new_v4().to_string();
+    rewrite_meta_id(&mut lines, &new_id);
+
+    let now = chrono::Utc::now();
+    let dir = codex_home
+        .join("sessions")
+        .join(now.format("%Y").to_string())
+        .join(now.format("%m").to_string())
+        .join(now.format("%d").to_string());
+    fs::create_dir_all(&dir)?;
+    let fname = format!("rollout-{}-{}.jsonl", now.format("%Y-%m-%dT%H-%M-%S"), new_id);
+    let mut body = lines.join("\n");
+    body.push('\n');
+    fs::write(dir.join(fname), body)?;
+
+    Ok(Branched {
+        new_id: new_id.clone(),
+        resume: format!("codex resume {new_id}"),
+        kept_messages: kept,
+    })
+}
+
+/// Destructive: truncate the original session file at the `at`-th message.
+pub fn truncate(codex_home: &Path, id: &str, at: usize) -> Result<usize> {
+    let path = find_session_file(codex_home, id)
+        .ok_or_else(|| Error::SessionNotFound(id.to_string()))?;
+    let text = fs::read_to_string(&path)?;
+    let (lines, kept) = slice_lines(&text, Some(at));
+    let mut body = lines.join("\n");
+    body.push('\n');
+    fs::write(&path, body)?;
+    Ok(kept)
+}
+
+/// Set `session_meta.payload.id` to `new_id` in the first session_meta line.
+fn rewrite_meta_id(lines: &mut [String], new_id: &str) {
+    for line in lines.iter_mut() {
+        if let Ok(mut v) = serde_json::from_str::<Value>(line) {
+            if v.get("type").and_then(Value::as_str) == Some("session_meta") {
+                if let Some(p) = v.get_mut("payload").and_then(|p| p.as_object_mut()) {
+                    p.insert("id".to_string(), Value::String(new_id.to_string()));
+                }
+                if let Ok(s) = serde_json::to_string(&v) {
+                    *line = s;
+                }
+                break;
+            }
+        }
+    }
 }
 
 /// Join the `text` fields of a Codex `content` block array.

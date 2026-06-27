@@ -96,3 +96,139 @@ pub fn list_all_projects(db_path: &Path) -> Result<Vec<ProjectSessions>> {
 pub fn default_db_path(home: &Path) -> std::path::PathBuf {
     home.join(".local/share/opencode/opencode.db")
 }
+
+// ------------------------------------------------------------------ branching
+
+use std::process::Command;
+use serde_json::Value;
+
+pub struct Branched {
+    pub new_id: Option<String>,
+    pub resume: Option<String>,
+    pub kept_messages: usize,
+}
+
+/// (message id, role, snippet) for each message, so a caller can choose a branch
+/// point. Uses `opencode export` (read-only).
+pub fn message_points(session_id: &str) -> Result<Vec<(String, String, String)>> {
+    let json = export(session_id)?;
+    let mut out = Vec::new();
+    if let Some(msgs) = json.get("messages").and_then(Value::as_array) {
+        for m in msgs {
+            let info = m.get("info");
+            let id = info.and_then(|i| i.get("id")).and_then(Value::as_str).unwrap_or("").to_string();
+            let role = info.and_then(|i| i.get("role")).and_then(Value::as_str).unwrap_or("").to_string();
+            let snippet = message_text(m).chars().take(60).collect();
+            out.push((id, role, snippet));
+        }
+    }
+    Ok(out)
+}
+
+/// Branch a session through OpenCode's own export/import (no direct DB writes).
+/// Slices messages up to `at_msg` (inclusive; `None` = whole session), imports
+/// the result as a new session, and returns its id.
+pub fn branch(session_id: &str, at_msg: Option<&str>) -> Result<Branched> {
+    let mut json = export(session_id)?;
+
+    let kept = {
+        let msgs = json
+            .get_mut("messages")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| io_err("export has no messages array"))?;
+        if let Some(at) = at_msg {
+            if let Some(pos) = msgs.iter().position(|m| {
+                m.get("info").and_then(|i| i.get("id")).and_then(Value::as_str) == Some(at)
+            }) {
+                msgs.truncate(pos + 1);
+            } else {
+                return Err(io_err(format!("message {at} not found in session")));
+            }
+        }
+        msgs.len()
+    };
+
+    // Mark provenance; let import mint a fresh session id.
+    if let Some(info) = json.get_mut("info").and_then(Value::as_object_mut) {
+        info.insert("parentID".to_string(), Value::String(session_id.to_string()));
+    }
+
+    let tmp = std::env::temp_dir().join(format!("sily-oc-branch-{}.json", std::process::id()));
+    std::fs::write(&tmp, serde_json::to_string(&json).map_err(io_err)?)?;
+
+    let out = Command::new("opencode")
+        .arg("import")
+        .arg(&tmp)
+        .output()
+        .map_err(|e| io_err(format!("failed to run opencode import: {e}")))?;
+    let _ = std::fs::remove_file(&tmp);
+    if !out.status.success() {
+        return Err(io_err(format!(
+            "opencode import failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+
+    // Find the new (different) session id in the import output.
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let new_id = find_new_session_id(&combined, session_id);
+    let resume = new_id.as_ref().map(|i| format!("opencode --session {i}"));
+    Ok(Branched { new_id, resume, kept_messages: kept })
+}
+
+fn export(session_id: &str) -> Result<Value> {
+    let out = Command::new("opencode")
+        .arg("export")
+        .arg(session_id)
+        .output()
+        .map_err(|e| io_err(format!("failed to run opencode export: {e}")))?;
+    if !out.status.success() {
+        return Err(io_err(format!(
+            "opencode export failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    serde_json::from_slice(&out.stdout).map_err(io_err)
+}
+
+fn message_text(m: &Value) -> String {
+    m.get("parts")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|p| p.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default()
+}
+
+/// Scan text for the first `ses_…` token that isn't the source id.
+fn find_new_session_id(text: &str, source: &str) -> Option<String> {
+    let mut best: Option<String> = None;
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        if &text[i..i + 4] == "ses_" {
+            let start = i;
+            let mut j = i + 4;
+            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric()) {
+                j += 1;
+            }
+            let tok = &text[start..j];
+            if tok.len() > 8 && tok != source {
+                best = Some(tok.to_string());
+                break;
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    best
+}
