@@ -89,7 +89,12 @@ enum Cmd {
         all: bool,
     },
     /// Print the linear history of a session.
-    Log { session: String },
+    Log {
+        session: String,
+        /// Show only the user's prompts (skip assistant turns, tools, noise).
+        #[arg(short, long)]
+        prompts: bool,
+    },
     /// Show the branch tree of a session.
     Tree { session: String },
     /// Save a commit (a named pointer) at a session's HEAD or a chosen message.
@@ -239,6 +244,21 @@ fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
     })
 }
 
+/// Print only the user's real prompts from (role, text) pairs, numbered.
+fn print_user_prompts(points: impl Iterator<Item = (String, String)>) {
+    let mut n = 0;
+    for (role, text) in points {
+        if role == "user" && render::is_real_prompt(&text) {
+            n += 1;
+            let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            println!("{n:>3}. {one_line}");
+        }
+    }
+    if n == 0 {
+        println!("(no user prompts)");
+    }
+}
+
 /// Print Codex message points: a numbered list (use the number with `--at`).
 fn print_points(points: Vec<(usize, String, String)>) {
     if points.is_empty() {
@@ -332,12 +352,30 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
         }
 
-        Cmd::Log { session } => match detect_provider(&ctx, &session) {
-            "codex-cli" => print_points(sily_adapter_codex::message_points(&ctx.codex_home, &session)?),
-            "opencode" => print_oc_points(sily_adapter_opencode::message_points(&session)?),
+        Cmd::Log { session, prompts } => match detect_provider(&ctx, &session) {
+            "codex-cli" => {
+                let pts = sily_adapter_codex::message_points(&ctx.codex_home, &session)?;
+                if prompts {
+                    print_user_prompts(pts.into_iter().map(|(_, role, text)| (role, text)));
+                } else {
+                    print_points(pts);
+                }
+            }
+            "opencode" => {
+                let pts = sily_adapter_opencode::message_points(&session)?;
+                if prompts {
+                    print_user_prompts(pts.into_iter().map(|(_, role, text)| (role, text)));
+                } else {
+                    print_oc_points(pts);
+                }
+            }
             _ => {
                 let s = claude_store_for(&ctx, &session)?.load(&session)?;
-                print!("{}", render::log(&s));
+                if prompts {
+                    print!("{}", render::prompts(&s));
+                } else {
+                    print!("{}", render::log(&s));
+                }
             }
         },
 

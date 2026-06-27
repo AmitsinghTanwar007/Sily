@@ -26,6 +26,30 @@ fn short(uuid: &str) -> &str {
     &uuid[..uuid.len().min(8)]
 }
 
+/// A real, human-typed prompt — not a tool result, command output, or injected
+/// context (those are empty here or wrapped in `<…>` tags).
+pub fn is_real_prompt(text: &str) -> bool {
+    let t = text.trim();
+    !t.is_empty() && !t.starts_with('<') && !t.starts_with("[Request interrupted")
+}
+
+/// Just the user's prompts, in order — skips assistant turns, tool calls,
+/// sidechains, and command/caveat noise.
+pub fn prompts(session: &Session) -> String {
+    let mut out = String::new();
+    let mut n = 0;
+    for m in &session.messages {
+        if matches!(m.role, Role::User) && is_real_prompt(&m.text) {
+            n += 1;
+            out.push_str(&format!("{n:>3}. {}\n", snippet(&m.text, 100)));
+        }
+    }
+    if out.is_empty() {
+        out.push_str("(no user prompts)\n");
+    }
+    out
+}
+
 /// Linear history in append-log (file) order — how Claude itself reads the
 /// session. This is robust to the phantom `parentUuid` links real files carry.
 pub fn log(session: &Session) -> String {
