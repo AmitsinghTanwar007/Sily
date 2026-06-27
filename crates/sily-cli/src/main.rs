@@ -174,6 +174,15 @@ fn detect_provider(ctx: &Ctx, id: &str) -> &'static str {
     }
 }
 
+/// A Claude store pointed at the project that actually contains `id` (anywhere
+/// under the Claude home), so commands work regardless of the current directory.
+fn claude_store_for(ctx: &Ctx, id: &str) -> Result<ClaudeStore, CliError> {
+    match sily_adapter_claude::locate(&ctx.claude_home, id) {
+        Some((dir, cwd)) => Ok(ClaudeStore::from_project_dir(dir, cwd)),
+        None => Err(CliError::Core(sily_core::Error::SessionNotFound(id.to_string()))),
+    }
+}
+
 fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
@@ -209,6 +218,26 @@ fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
         codex_home,
         opencode_db,
     })
+}
+
+/// Print Codex message points: a numbered list (use the number with `--at`).
+fn print_points(points: Vec<(usize, String, String)>) {
+    if points.is_empty() {
+        println!("(no messages)");
+    }
+    for (n, role, snippet) in points {
+        println!("{n:>4}  {role:<9}  {snippet}");
+    }
+}
+
+/// Print OpenCode message points: message id + role + snippet.
+fn print_oc_points(points: Vec<(String, String, String)>) {
+    if points.is_empty() {
+        println!("(no messages)");
+    }
+    for (id, role, snippet) in points {
+        println!("{id}  {role:<9}  {snippet}");
+    }
 }
 
 /// Parse an optional Codex branch point ("3" → message #3; None → whole session).
@@ -277,15 +306,24 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
         }
 
-        Cmd::Log { session } => {
-            let s = ctx.store.load(&session)?;
-            print!("{}", render::log(&s));
-        }
+        Cmd::Log { session } => match detect_provider(&ctx, &session) {
+            "codex-cli" => print_points(sily_adapter_codex::message_points(&ctx.codex_home, &session)?),
+            "opencode" => print_oc_points(sily_adapter_opencode::message_points(&session)?),
+            _ => {
+                let s = claude_store_for(&ctx, &session)?.load(&session)?;
+                print!("{}", render::log(&s));
+            }
+        },
 
-        Cmd::Tree { session } => {
-            let s = ctx.store.load(&session)?;
-            print!("{}", render::tree(&s));
-        }
+        Cmd::Tree { session } => match detect_provider(&ctx, &session) {
+            // codex/opencode are linear append-logs (no in-file branch tree).
+            "codex-cli" => print_points(sily_adapter_codex::message_points(&ctx.codex_home, &session)?),
+            "opencode" => print_oc_points(sily_adapter_opencode::message_points(&session)?),
+            _ => {
+                let s = claude_store_for(&ctx, &session)?.load(&session)?;
+                print!("{}", render::tree(&s));
+            }
+        },
 
         Cmd::Commit {
             session,
@@ -298,7 +336,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             // (empty = HEAD / whole session).
             let msg_uuid = match detect_provider(&ctx, &session) {
                 "claude-code" => {
-                    let s = ctx.store.load(&session)?;
+                    let s = claude_store_for(&ctx, &session)?.load(&session)?;
                     match at {
                         Some(u) => {
                             if s.message(&u).is_none() {
@@ -361,14 +399,15 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 print_opencode_branch(&b);
             }
             _ => {
-                let s = ctx.store.load(&session)?;
+                let store = claude_store_for(&ctx, &session)?;
+                let s = store.load(&session)?;
                 let at = match at {
                     Some(u) => u,
                     None => head_uuid(&s)?,
                 };
                 let new_id = new_session_id();
                 let branched = branch_at(&s, &at, new_id.clone())?;
-                ctx.store.save(&branched)?;
+                store.save(&branched)?;
                 ctx.branches.add(BranchRecord {
                     session_id: new_id.clone(),
                     from_session: session,
@@ -413,10 +452,11 @@ fn run(cli: Cli) -> Result<(), CliError> {
                     print_opencode_branch(&b);
                 }
                 _ => {
-                    let s = ctx.store.load(&c.session_id)?;
+                    let store = claude_store_for(&ctx, &c.session_id)?;
+                    let s = store.load(&c.session_id)?;
                     if hard {
                         let reset = truncate_at(&s, &c.message_uuid)?;
-                        ctx.store.save(&reset)?;
+                        store.save(&reset)?;
                         println!(
                             "hard-reset session {} to commit '{}' ({} messages kept)",
                             &c.session_id[..c.session_id.len().min(8)],
@@ -426,7 +466,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
                     } else {
                         let new_id = new_session_id();
                         let forked = branch_at(&s, &c.message_uuid, new_id.clone())?;
-                        ctx.store.save(&forked)?;
+                        store.save(&forked)?;
                         ctx.branches.add(BranchRecord {
                             session_id: new_id.clone(),
                             from_session: c.session_id.clone(),
@@ -443,8 +483,8 @@ fn run(cli: Cli) -> Result<(), CliError> {
         }
 
         Cmd::Diff { a, b } => {
-            let sa = ctx.store.load(&a)?;
-            let sb = ctx.store.load(&b)?;
+            let sa = claude_store_for(&ctx, &a)?.load(&a)?;
+            let sb = claude_store_for(&ctx, &b)?.load(&b)?;
             let ha = head_uuid(&sa)?;
             let hb = head_uuid(&sb)?;
             let d = diff(&sa, &ha, &sb, &hb)?;

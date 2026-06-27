@@ -69,6 +69,26 @@ pub fn list_all_projects(claude_home: &Path) -> Result<Vec<ProjectSessions>> {
     Ok(out)
 }
 
+/// Find a session by id across ALL projects under the Claude home, returning the
+/// project dir it lives in and its recorded cwd. Lets commands work regardless of
+/// the current working directory.
+pub fn locate(claude_home: &Path, id: &str) -> Option<(PathBuf, String)> {
+    let projects = claude_home.join("projects");
+    let entries = fs::read_dir(&projects).ok()?;
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let file = dir.join(format!("{id}.jsonl"));
+        if file.exists() {
+            let cwd = read_cwd(&file).unwrap_or_default();
+            return Some((dir, cwd));
+        }
+    }
+    None
+}
+
 /// Read the `cwd` field from the first record that has one.
 fn read_cwd(path: &Path) -> Option<String> {
     let text = fs::read_to_string(path).ok()?;
@@ -95,6 +115,12 @@ impl ClaudeStore {
     pub fn new(claude_home: impl AsRef<Path>, cwd: impl Into<String>) -> Self {
         let cwd = cwd.into();
         let project_dir = claude_home.as_ref().join("projects").join(encode_cwd(&cwd));
+        Self { project_dir, cwd }
+    }
+
+    /// Build a store pointed directly at a known project dir (used when a session
+    /// is located by id in a project other than the current cwd).
+    pub fn from_project_dir(project_dir: PathBuf, cwd: String) -> Self {
         Self { project_dir, cwd }
     }
 
