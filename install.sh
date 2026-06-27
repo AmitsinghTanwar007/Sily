@@ -2,11 +2,13 @@
 # sily installer — downloads the latest prebuilt binary for your platform.
 #   curl -fsSL https://raw.githubusercontent.com/AmitsinghTanwar007/Sily/main/install.sh | sh
 #
-# Override the install location with SILY_BIN_DIR (default: ~/.local/bin).
+# By default installs to /usr/local/bin (already on your PATH, so `sily` works
+# immediately — may prompt for sudo). To install without root, set a user dir:
+#   SILY_BIN_DIR="$HOME/.local/bin" curl -fsSL .../install.sh | sh
 set -eu
 
 REPO="AmitsinghTanwar007/Sily"
-BIN_DIR="${SILY_BIN_DIR:-$HOME/.local/bin}"
+BIN_DIR="${SILY_BIN_DIR:-/usr/local/bin}"
 
 os=$(uname -s)
 arch=$(uname -m)
@@ -35,15 +37,38 @@ if ! curl -fsSL "$url" -o "$tmp/$asset"; then
     echo "      (has a release been published yet?)" >&2
     exit 1
 fi
-
 tar -xzf "$tmp/$asset" -C "$tmp"
-mkdir -p "$BIN_DIR"
-install -m 0755 "$tmp/sily" "$BIN_DIR/sily"
+
+# Decide whether we need sudo: check the nearest existing ancestor of BIN_DIR
+# (so a not-yet-created user dir like ~/.local/bin doesn't falsely require root).
+need_sudo=0
+probe="$BIN_DIR"
+while [ ! -e "$probe" ] && [ "$probe" != "/" ] && [ "$probe" != "." ]; do
+    probe=$(dirname "$probe")
+done
+[ -w "$probe" ] || need_sudo=1
+
+run() {
+    if [ "$need_sudo" -eq 1 ]; then sudo "$@"; else "$@"; fi
+}
+
+if [ "$need_sudo" -eq 1 ]; then
+    if [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+        echo "sily: need elevated permissions to write $BIN_DIR, but sudo isn't available." >&2
+        echo "      Install without root instead:" >&2
+        echo "      SILY_BIN_DIR=\"\$HOME/.local/bin\" curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh" >&2
+        exit 1
+    fi
+    echo "sily: installing to $BIN_DIR (may prompt for sudo) ..."
+fi
+
+run mkdir -p "$BIN_DIR"
+run install -m 0755 "$tmp/sily" "$BIN_DIR/sily"
 
 echo "sily: installed to $BIN_DIR/sily"
 "$BIN_DIR/sily" --version || true
 
-# If the bin dir is already reachable, we're done.
+# If BIN_DIR is already on PATH (true for /usr/local/bin), we're done — instant use.
 case ":$PATH:" in
     *":$BIN_DIR:"*)
         echo "sily: ready — run 'sily list' to get started."
@@ -51,8 +76,7 @@ case ":$PATH:" in
         ;;
 esac
 
-# Otherwise, add it to the right shell profile(s) automatically (idempotent).
-# Appends the line to $1 unless that file already references the bin dir.
+# Custom dir not on PATH: add it to the right shell profile(s), idempotently.
 append_path() {
     f="$1"
     line="$2"

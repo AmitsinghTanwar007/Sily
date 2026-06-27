@@ -14,8 +14,17 @@ point. No copy-paste, no losing work.
 curl -fsSL https://raw.githubusercontent.com/AmitsinghTanwar007/Sily/main/install.sh | sh
 ```
 
-That's it. (Installs to `~/.local/bin`. If `sily` isn't found after, add that to your
-PATH: `export PATH="$HOME/.local/bin:$PATH"`.)
+That's it — installs to `/usr/local/bin` (already on your PATH, so `sily` works
+right away; may ask for `sudo`).
+
+Prefer not to use root? Install to a user directory instead:
+
+```bash
+SILY_BIN_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/AmitsinghTanwar007/Sily/main/install.sh | sh
+```
+
+(That auto-adds the directory to your shell PATH; run `source ~/.bashrc` once, or
+open a new terminal.)
 
 ---
 
