@@ -1,0 +1,11 @@
+[package]
+name = "sily-adapter-codex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Codex CLI adapter for sily: reads ~/.codex/sessions rollout .jsonl files."
+
+[dependencies]
+sily-core = { path = "../sily-core" }
+serde_json = { workspace = true }

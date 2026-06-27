@@ -12,11 +12,7 @@ use sily_core::store::{SessionRef, SessionStore};
 use crate::convert::{extract_text, message_to_record, record_to_message, rewrite_session_id, PROVIDER};
 use crate::encode::encode_cwd;
 
-/// All sessions found in one project folder, with the project's real cwd.
-pub struct ProjectSessions {
-    pub cwd: String,
-    pub sessions: Vec<SessionRef>,
-}
+pub use sily_core::store::ProjectSessions;
 
 /// Enumerate every project under `<claude_home>/projects/`, with its sessions.
 /// The real cwd is read from inside a session file (folder-name encoding is

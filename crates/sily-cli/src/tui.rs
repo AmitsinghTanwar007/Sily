@@ -14,9 +14,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
-use sily_adapter_claude::ProjectSessions;
 use sily_core::model::{BranchRecord, Commit};
-use sily_core::store::SessionRef;
+use sily_core::store::{ProjectSessions, SessionRef};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -64,33 +63,36 @@ fn trie_insert(t: &mut Trie, comps: &[&str], sessions: Vec<SessionRef>) {
 }
 
 fn build_tree(
-    projects: &[ProjectSessions],
+    providers: &[(String, Vec<ProjectSessions>)],
     commits: &[Commit],
     branches: &[BranchRecord],
 ) -> Tree {
-    // path trie of project cwds
-    let mut root = Trie::default();
-    for p in projects {
-        let comps: Vec<&str> = p.cwd.split('/').filter(|s| !s.is_empty()).collect();
-        trie_insert(&mut root, &comps, p.sessions.clone());
-    }
-
     let mut tree = Tree { nodes: Vec::new(), roots: Vec::new() };
-    let adapter = tree.push(Node {
-        kind: Kind::Adapter,
-        primary: "claude-code".to_string(),
-        secondary: String::new(),
-        meta: String::new(),
-        session_id: None,
-        children: Vec::new(),
-    });
-    tree.roots.push(adapter);
+    for (name, projects) in providers {
+        // path trie of this provider's project cwds
+        let mut root = Trie::default();
+        for p in projects {
+            let comps: Vec<&str> = p.cwd.split('/').filter(|s| !s.is_empty()).collect();
+            trie_insert(&mut root, &comps, p.sessions.clone());
+        }
 
-    let mut top: Vec<usize> = Vec::new();
-    for (name, child) in &root.children {
-        top.push(convert_dir(&mut tree, format!("/{name}"), child, commits, branches));
+        let total: usize = projects.iter().map(|p| p.sessions.len()).sum();
+        let adapter = tree.push(Node {
+            kind: Kind::Adapter,
+            primary: name.clone(),
+            secondary: String::new(),
+            meta: format!("{total} sessions"),
+            session_id: None,
+            children: Vec::new(),
+        });
+        tree.roots.push(adapter);
+
+        let mut top: Vec<usize> = Vec::new();
+        for (seg, child) in &root.children {
+            top.push(convert_dir(&mut tree, format!("/{seg}"), child, commits, branches));
+        }
+        tree.nodes[adapter].children = top;
     }
-    tree.nodes[adapter].children = top;
     tree
 }
 
@@ -274,11 +276,11 @@ impl App {
 }
 
 pub fn run(
-    projects: &[ProjectSessions],
+    providers: &[(String, Vec<ProjectSessions>)],
     commits: &[Commit],
     branches: &[BranchRecord],
 ) -> std::io::Result<Option<String>> {
-    let mut app = App::new(build_tree(projects, commits, branches));
+    let mut app = App::new(build_tree(providers, commits, branches));
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &mut app);
     ratatui::restore();

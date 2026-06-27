@@ -18,6 +18,13 @@ pub struct SessionRef {
     pub meta: SessionMeta,
 }
 
+/// All sessions found in one project (one `cwd`), for a provider's listing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectSessions {
+    pub cwd: String,
+    pub sessions: Vec<SessionRef>,
+}
+
 /// A provider backend that can read, write, and enumerate sessions.
 pub trait SessionStore {
     /// Load a full session by id into the canonical model.

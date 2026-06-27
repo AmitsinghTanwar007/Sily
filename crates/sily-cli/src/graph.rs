@@ -10,9 +10,8 @@ use std::time::SystemTime;
 
 use owo_colors::{OwoColorize, Stream::Stdout, Style};
 
-use sily_adapter_claude::ProjectSessions;
 use sily_core::model::{BranchRecord, Commit};
-use sily_core::store::SessionRef;
+use sily_core::store::{ProjectSessions, SessionRef};
 
 /// Render one project's session/branch graph (`sily list`).
 pub fn render_list(sessions: &[SessionRef], commits: &[Commit], branches: &[BranchRecord]) -> String {
@@ -28,24 +27,34 @@ pub fn render_list(sessions: &[SessionRef], commits: &[Commit], branches: &[Bran
     out
 }
 
-/// Render the full tree across all projects (`sily list --all`).
+/// Render the full tree across all providers and projects (`sily list`).
 pub fn render_all(
-    provider: &str,
-    projects: &[ProjectSessions],
+    providers: &[(String, Vec<ProjectSessions>)],
     commits: &[Commit],
     branches: &[BranchRecord],
 ) -> String {
-    let mut out = String::new();
-    out.push_str(&format!(
-        "{} {}\n",
-        "●".if_supports_color(Stdout, |t| t.magenta()),
-        provider.if_supports_color(Stdout, |t| t.style(Style::new().magenta().bold())),
-    ));
-    if projects.is_empty() {
-        out.push_str("  (no sessions found)\n");
-        return out;
+    if providers.is_empty() {
+        return "(no sessions found)\n".to_string();
     }
+    let mut out = String::new();
+    for (name, projects) in providers {
+        out.push_str(&format!(
+            "{} {}\n",
+            "●".if_supports_color(Stdout, |t| t.magenta()),
+            name.if_supports_color(Stdout, |t| t.style(Style::new().magenta().bold())),
+        ));
+        render_provider(projects, commits, branches, &mut out);
+        out.push('\n');
+    }
+    out
+}
 
+fn render_provider(
+    projects: &[ProjectSessions],
+    commits: &[Commit],
+    branches: &[BranchRecord],
+    out: &mut String,
+) {
     // newest-active project first
     let mut order: Vec<usize> = (0..projects.len()).collect();
     order.sort_by(|&a, &b| latest(&projects[b].sessions).cmp(&latest(&projects[a].sessions)));
@@ -64,13 +73,12 @@ pub fn render_all(
         ));
         let ctx = Ctx::build(&proj.sessions, commits, branches);
         for root in ctx.roots_sorted() {
-            render_session(&ctx, &root.id, child_prefix, &mut out);
+            render_session(&ctx, &root.id, child_prefix, out);
         }
         if !last {
             out.push_str(&"│\n".if_supports_color(Stdout, |t| t.dimmed()).to_string());
         }
     }
-    out
 }
 
 fn latest(sessions: &[SessionRef]) -> Option<SystemTime> {

@@ -142,6 +142,24 @@ struct Ctx {
     commits: CommitStore,
     branches: BranchStore,
     claude_home: std::path::PathBuf,
+    codex_home: std::path::PathBuf,
+    opencode_db: std::path::PathBuf,
+}
+
+/// Gather session listings from every supported provider, skipping ones that
+/// aren't installed (empty) and warning on errors.
+fn gather_providers(ctx: &Ctx) -> Vec<(String, Vec<sily_core::store::ProjectSessions>)> {
+    let mut out = Vec::new();
+    let mut add = |name: &str, res: sily_core::Result<Vec<sily_core::store::ProjectSessions>>| match res
+    {
+        Ok(projects) if !projects.is_empty() => out.push((name.to_string(), projects)),
+        Ok(_) => {}
+        Err(e) => eprintln!("sily: {name} adapter error: {e}"),
+    };
+    add("claude-code", sily_adapter_claude::list_all_projects(&ctx.claude_home));
+    add("codex-cli", sily_adapter_codex::list_all_projects(&ctx.codex_home));
+    add("opencode", sily_adapter_opencode::list_all_projects(&ctx.opencode_db));
+    out
 }
 
 fn now_iso() -> String {
@@ -161,6 +179,12 @@ fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
     let sily_home = std::env::var_os("SILY_HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| home.join(".sily"));
+    let codex_home = std::env::var_os("SILY_CODEX_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"));
+    let opencode_db = std::env::var_os("SILY_OPENCODE_DB")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| sily_adapter_opencode::default_db_path(&home));
     let cwd = match cwd_override {
         Some(c) => c,
         None => std::env::current_dir()?.to_string_lossy().into_owned(),
@@ -170,6 +194,8 @@ fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
         commits: CommitStore::new(&sily_home),
         branches: BranchStore::new(&sily_home),
         claude_home,
+        codex_home,
+        opencode_db,
     })
 }
 
@@ -196,19 +222,16 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 let sessions = ctx.store.list()?;
                 print!("{}", graph::render_list(&sessions, &commits, &branches));
             } else {
-                let projects = sily_adapter_claude::list_all_projects(&ctx.claude_home)?;
+                let providers = gather_providers(&ctx);
                 // Interactive when attached to a terminal; static tree when piped.
                 if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-                    if let Some(cmd) = tui::run(&projects, &commits, &branches)
+                    if let Some(cmd) = tui::run(&providers, &commits, &branches)
                         .map_err(|e| CliError::Msg(e.to_string()))?
                     {
                         println!("{cmd}");
                     }
                 } else {
-                    print!(
-                        "{}",
-                        graph::render_all("claude-code", &projects, &commits, &branches)
-                    );
+                    print!("{}", graph::render_all(&providers, &commits, &branches));
                 }
             }
         }

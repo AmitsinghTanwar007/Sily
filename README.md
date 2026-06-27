@@ -85,8 +85,10 @@ A Claude Code session is just a file on disk. sily reads that file, slices it at
 point you choose, and writes a new valid session you can resume — all without calling
 any API. Your commits live in `~/.sily/`.
 
-Built in Rust as a clean core + pluggable adapter, so support for other AI tools can be
-added later. See the source for details.
+Built in Rust as a clean core + pluggable adapters. `sily list` shows sessions from
+**Claude Code**, **Codex CLI** (`~/.codex/sessions`), and **OpenCode** (its SQLite
+database) together in one tree. Commit / branch / revert currently target Claude Code
+sessions.
 
 ---
 
