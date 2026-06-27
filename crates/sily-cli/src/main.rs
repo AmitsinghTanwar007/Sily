@@ -4,18 +4,21 @@
 //! the only backend is Claude Code; a `--provider` flag / registry can select
 //! others later without touching command logic.
 
+mod branchstore;
 mod commitstore;
+mod graph;
 mod render;
 
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use sily_core::model::Commit;
+use sily_core::model::{BranchRecord, Commit};
 use sily_core::ops::{branch_at, diff, truncate_at};
 use sily_core::store::SessionStore;
 use sily_adapter_claude::ClaudeStore;
 
+use branchstore::BranchStore;
 use commitstore::CommitStore;
 
 /// One error type for the CLI. `From` impls let command code use `?` directly
@@ -127,6 +130,7 @@ fn main() -> ExitCode {
 struct Ctx {
     store: ClaudeStore,
     commits: CommitStore,
+    branches: BranchStore,
 }
 
 fn now_iso() -> String {
@@ -152,7 +156,8 @@ fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
     };
     Ok(Ctx {
         store: ClaudeStore::new(claude_home, cwd),
-        commits: CommitStore::new(sily_home),
+        commits: CommitStore::new(&sily_home),
+        branches: BranchStore::new(&sily_home),
     })
 }
 
@@ -169,14 +174,10 @@ fn run(cli: Cli) -> Result<(), CliError> {
     let ctx = build_ctx(cli.cwd)?;
     match cli.cmd {
         Cmd::List => {
-            let mut refs = ctx.store.list()?;
-            refs.sort_by(|a, b| a.id.cmp(&b.id));
-            if refs.is_empty() {
-                println!("(no sessions in this project)");
-            }
-            for r in refs {
-                println!("{}  {}", &r.id[..r.id.len().min(8)], r.summary);
-            }
+            let sessions = ctx.store.list()?;
+            let commits = ctx.commits.all()?;
+            let branches = ctx.branches.all()?;
+            print!("{}", graph::render_list(&sessions, &commits, &branches));
         }
 
         Cmd::Log { session } => {
@@ -244,6 +245,13 @@ fn run(cli: Cli) -> Result<(), CliError> {
             let new_id = new_session_id();
             let branched = branch_at(&s, &at, new_id.clone())?;
             ctx.store.save(&branched)?;
+            ctx.branches.add(BranchRecord {
+                session_id: new_id.clone(),
+                from_session: session,
+                at_message: at.clone(),
+                origin: "branch".to_string(),
+                created_at: now_iso(),
+            })?;
             println!("created session {new_id}");
             println!("  {} messages, branched at {}", branched.messages.len(), &at[..at.len().min(8)]);
             println!("  resume with:  claude --resume {new_id}");
@@ -270,6 +278,13 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 let forked =
                     branch_at(&s, &c.message_uuid, new_id.clone())?;
                 ctx.store.save(&forked)?;
+                ctx.branches.add(BranchRecord {
+                    session_id: new_id.clone(),
+                    from_session: c.session_id.clone(),
+                    at_message: c.message_uuid.clone(),
+                    origin: c.name.clone(),
+                    created_at: now_iso(),
+                })?;
                 println!("reverted commit '{}' into new session {new_id}", c.name);
                 println!("  {} messages restored", forked.messages.len());
                 println!("  resume with:  claude --resume {new_id}");

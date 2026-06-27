@@ -19,6 +19,6 @@ pub mod ops;
 pub mod store;
 
 pub use error::{Error, Result};
-pub use model::{Commit, Message, Role, Session, SessionMeta};
+pub use model::{BranchRecord, Commit, Message, Role, Session, SessionMeta};
 pub use ops::{branch_at, diff, index_of, lineage, prefix_until, truncate_at, Divergence};
 pub use store::{SessionRef, SessionStore};

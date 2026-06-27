@@ -143,3 +143,18 @@ pub struct Commit {
     pub created_at: String,
     pub note: Option<String>,
 }
+
+/// Provenance for a session created by `branch`/`revert`: records which session
+/// it came from and where, so the graph can show branch relationships.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BranchRecord {
+    /// The newly created session.
+    pub session_id: String,
+    /// The session it was branched from.
+    pub from_session: String,
+    /// The message it was branched at.
+    pub at_message: String,
+    /// How it was created: a commit name, or "branch".
+    pub origin: String,
+    pub created_at: String,
+}

@@ -11,6 +11,10 @@ pub struct SessionRef {
     pub id: String,
     /// Short human summary (e.g. first user message).
     pub summary: String,
+    /// Number of user/assistant messages.
+    pub message_count: usize,
+    /// Last-modified time of the underlying file, if available.
+    pub modified: Option<std::time::SystemTime>,
     pub meta: SessionMeta,
 }
 

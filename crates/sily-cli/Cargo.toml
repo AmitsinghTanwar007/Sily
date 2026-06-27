@@ -17,5 +17,6 @@ clap = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
+owo-colors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

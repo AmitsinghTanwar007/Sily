@@ -129,10 +129,13 @@ impl SessionStore for ClaudeStore {
             let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
-            let summary = first_user_summary(&path).unwrap_or_default();
+            let modified = fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+            let (summary, message_count) = scan_session(&path);
             refs.push(SessionRef {
                 id: id.to_string(),
                 summary,
+                message_count,
+                modified,
                 meta: self.meta(),
             });
         }
@@ -140,14 +143,23 @@ impl SessionStore for ClaudeStore {
     }
 }
 
-/// Cheap listing summary: the first user message's text, truncated.
-fn first_user_summary(path: &Path) -> Option<String> {
-    let text = fs::read_to_string(path).ok()?;
+/// One pass over a session file: the first user message (truncated summary) and
+/// the total user/assistant message count.
+fn scan_session(path: &Path) -> (String, usize) {
+    let Ok(text) = fs::read_to_string(path) else {
+        return (String::new(), 0);
+    };
+    let mut summary = String::new();
+    let mut count = 0usize;
     for line in text.lines() {
         let Ok(val) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if val.get("type").and_then(Value::as_str) == Some("user") {
+        match val.get("type").and_then(Value::as_str) {
+            Some("user") | Some("assistant") => count += 1,
+            _ => continue,
+        }
+        if summary.is_empty() && val.get("type").and_then(Value::as_str) == Some("user") {
             let t = val
                 .get("message")
                 .and_then(|m| m.get("content"))
@@ -155,11 +167,11 @@ fn first_user_summary(path: &Path) -> Option<String> {
                 .unwrap_or_default();
             let t = t.trim();
             if !t.is_empty() {
-                return Some(t.chars().take(80).collect());
+                summary = t.chars().take(80).collect();
             }
         }
     }
-    None
+    (summary, count)
 }
 
 #[cfg(test)]
