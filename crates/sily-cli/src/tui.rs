@@ -31,8 +31,30 @@ struct Node {
     primary: String,
     secondary: String,
     meta: String,
-    session_id: Option<String>,
+    /// The full resume command for this node, if it's a resumable session.
+    resume: Option<String>,
     children: Vec<usize>,
+}
+
+/// The provider-specific command to resume a session.
+fn resume_command(provider: &str, id: &str) -> String {
+    match provider {
+        "codex-cli" => format!("codex resume {id}"),
+        "opencode" => format!("opencode --session {id}"),
+        _ => format!("claude --resume {id}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resume_command;
+
+    #[test]
+    fn resume_command_is_provider_specific() {
+        assert_eq!(resume_command("claude-code", "abc"), "claude --resume abc");
+        assert_eq!(resume_command("codex-cli", "abc"), "codex resume abc");
+        assert_eq!(resume_command("opencode", "ses_abc"), "opencode --session ses_abc");
+    }
 }
 
 struct Tree {
@@ -82,14 +104,14 @@ fn build_tree(
             primary: name.clone(),
             secondary: String::new(),
             meta: format!("{total} sessions"),
-            session_id: None,
+            resume: None,
             children: Vec::new(),
         });
         tree.roots.push(adapter);
 
         let mut top: Vec<usize> = Vec::new();
         for (seg, child) in &root.children {
-            top.push(convert_dir(&mut tree, format!("/{seg}"), child, commits, branches));
+            top.push(convert_dir(&mut tree, format!("/{seg}"), child, commits, branches, name));
         }
         tree.nodes[adapter].children = top;
     }
@@ -104,6 +126,7 @@ fn convert_dir(
     trie: &Trie,
     commits: &[Commit],
     branches: &[BranchRecord],
+    provider: &str,
 ) -> usize {
     let mut cur = trie;
     while cur.sessions.is_empty() && cur.children.len() == 1 {
@@ -119,21 +142,20 @@ fn convert_dir(
     let mut sessions = cur.sessions.clone();
     sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
     for s in &sessions {
-        children.push(convert_session(tree, s, commits, branches));
+        children.push(convert_session(tree, s, commits, branches, provider));
     }
     for (k, child) in &cur.children {
-        children.push(convert_dir(tree, format!("{label}/{k}"), child, commits, branches));
+        children.push(convert_dir(tree, format!("{label}/{k}"), child, commits, branches, provider));
     }
 
-    let id = tree.push(Node {
+    tree.push(Node {
         kind: Kind::Dir,
         primary: label,
         secondary: String::new(),
         meta: format!("{total_sessions} sessions"),
-        session_id: None,
+        resume: None,
         children,
-    });
-    id
+    })
 }
 
 fn count_sessions(t: &Trie) -> usize {
@@ -145,6 +167,7 @@ fn convert_session(
     s: &SessionRef,
     commits: &[Commit],
     branches: &[BranchRecord],
+    provider: &str,
 ) -> usize {
     let mut children = Vec::new();
     for c in commits.iter().filter(|c| c.session_id == s.id) {
@@ -154,17 +177,18 @@ fn convert_session(
             primary: c.name.clone(),
             secondary: if note.is_empty() { String::new() } else { format!("\"{note}\"") },
             meta: String::new(),
-            session_id: None,
+            resume: None,
             children: Vec::new(),
         }));
     }
+    // sily branches are always Claude Code sessions.
     for b in branches.iter().filter(|b| b.from_session == s.id) {
         children.push(tree.push(Node {
             kind: Kind::Branch,
             primary: short(&b.session_id).to_string(),
             secondary: b.origin.clone(),
             meta: String::new(),
-            session_id: Some(b.session_id.clone()),
+            resume: Some(resume_command("claude-code", &b.session_id)),
             children: Vec::new(),
         }));
     }
@@ -173,7 +197,7 @@ fn convert_session(
         primary: short(&s.id).to_string(),
         secondary: truncate(&s.summary, 60),
         meta: meta_line(s.message_count, s.modified),
-        session_id: Some(s.id.clone()),
+        resume: Some(resume_command(provider, &s.id)),
         children,
     })
 }
@@ -262,8 +286,7 @@ impl App {
 
     fn copy_resume(&mut self) {
         if let Some(id) = self.selected_node() {
-            if let Some(sid) = self.tree.nodes[id].session_id.clone() {
-                let cmd = format!("claude --resume {sid}");
+            if let Some(cmd) = self.tree.nodes[id].resume.clone() {
                 if copy_to_clipboard(&cmd) {
                     self.status = format!("copied: {cmd}");
                 } else {
