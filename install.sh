@@ -51,39 +51,50 @@ case ":$PATH:" in
         ;;
 esac
 
-# Otherwise, add it to the right shell profile automatically (idempotent).
+# Otherwise, add it to the right shell profile(s) automatically (idempotent).
+# Appends the line to $1 unless that file already references the bin dir.
+append_path() {
+    f="$1"
+    line="$2"
+    if [ -f "$f" ] && grep -qF "$BIN_DIR" "$f"; then
+        return 1
+    fi
+    mkdir -p "$(dirname "$f")"
+    printf '\n# added by sily installer\n%s\n' "$line" >> "$f"
+    return 0
+}
+
 shell_name=$(basename "${SHELL:-sh}")
-rc=""
-added=0
+export_line="export PATH=\"$BIN_DIR:\$PATH\""
+primary_rc=""
 
 case "$shell_name" in
     fish)
-        rc="$HOME/.config/fish/config.fish"
-        mkdir -p "$(dirname "$rc")"
-        if ! { [ -f "$rc" ] && grep -qF "$BIN_DIR" "$rc"; }; then
-            printf '\n# added by sily installer\nfish_add_path %s\n' "$BIN_DIR" >> "$rc"
-            added=1
+        primary_rc="$HOME/.config/fish/config.fish"
+        append_path "$primary_rc" "fish_add_path $BIN_DIR" || true
+        ;;
+    zsh)
+        primary_rc="$HOME/.zshrc"
+        append_path "$primary_rc" "$export_line" || true
+        ;;
+    bash)
+        # Linux interactive shells read .bashrc; macOS login shells read
+        # .bash_profile (falling back to .profile). Cover both.
+        primary_rc="$HOME/.bashrc"
+        append_path "$HOME/.bashrc" "$export_line" || true
+        if [ -f "$HOME/.bash_profile" ]; then
+            append_path "$HOME/.bash_profile" "$export_line" || true
+        else
+            append_path "$HOME/.profile" "$export_line" || true
         fi
         ;;
     *)
-        case "$shell_name" in
-            zsh) rc="$HOME/.zshrc" ;;
-            bash) rc="$HOME/.bashrc" ;;
-            *) rc="$HOME/.profile" ;;
-        esac
-        if ! { [ -f "$rc" ] && grep -qF "$BIN_DIR" "$rc"; }; then
-            printf '\n# added by sily installer\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$rc"
-            added=1
-        fi
+        primary_rc="$HOME/.profile"
+        append_path "$primary_rc" "$export_line" || true
         ;;
 esac
 
 echo
-if [ "$added" -eq 1 ]; then
-    echo "sily: added $BIN_DIR to your PATH in $rc"
-    echo "      Run this now (or just open a new terminal) to use 'sily':"
-    echo "        source \"$rc\""
-else
-    echo "sily: $BIN_DIR is configured in $rc but not active in this shell."
-    echo "      Open a new terminal, or run:  source \"$rc\""
-fi
+echo "sily: added $BIN_DIR to your PATH ($shell_name profile)."
+echo "      Use it now in this terminal:  source \"$primary_rc\""
+echo "      (new terminals will have it automatically.)"
