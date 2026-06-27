@@ -33,9 +33,20 @@ nothing in `sily-core` changes.
 
 ## Install
 
+One-line install (Linux x86_64, macOS arm64/x86_64):
+
 ```bash
-cargo build --release
-# binary at target/release/sily
+curl -fsSL https://raw.githubusercontent.com/AmitsinghTanwar007/Sily/main/install.sh | sh
+```
+
+Installs the latest released binary to `~/.local/bin` (override with `SILY_BIN_DIR`).
+
+With Rust toolchain, from source:
+
+```bash
+cargo install --git https://github.com/AmitsinghTanwar007/Sily sily-cli
+# or locally:
+cargo build --release   # binary at target/release/sily
 ```
 
 ## Usage
