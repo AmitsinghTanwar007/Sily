@@ -1,10 +1,13 @@
 # sily
 
-**Save and restore your Claude Code sessions — like git, but for AI chats.**
+**Save and restore your AI coding sessions — like git, but for AI chats.**
 
-Working in a Claude Code session that's in a good state? Save it with `sily commit`.
-Keep going — and if it goes wrong, `sily revert` puts you right back at the good
-point. No copy-paste, no losing work.
+Works across **Claude Code**, **Codex CLI**, and **OpenCode** — one tool to browse,
+bookmark, and rewind sessions from any of them.
+
+In a session that's in a good state? Save it with `sily commit`. Keep going — and if
+it goes wrong, `sily revert` puts you right back at the good point, with the bad
+version still kept. No copy-paste, no losing work.
 
 ---
 
@@ -31,19 +34,21 @@ open a new terminal.)
 ## Quick start
 
 ```bash
-# 1. See your sessions
+# 1. See your sessions (from every supported tool)
 sily list
 
 # 2. Save a good point (a "commit")
 sily commit <session-id> -m "working great here"
 
-# 3. ...keep working in Claude. If it goes sideways:
+# 3. ...keep working. If it goes sideways:
 
-# 4. Go back — this prints a new session id
+# 4. Go back — this prints a new session id AND the exact resume command
 sily revert <commit-name>
 
-# 5. Resume that session in Claude
-claude --resume <new-session-id>
+# 5. Resume that session — sily prints the right command for the tool, e.g.:
+claude --resume <id>      # Claude Code
+codex resume <id>         # Codex CLI
+opencode --session <id>   # OpenCode
 ```
 
 You're back at the good point. Your messed-up version is still saved too — nothing
@@ -67,8 +72,8 @@ is ever lost.
 | `sily update` | Update sily to the latest release |
 
 In the interactive `sily list` (in a terminal): `↑`/`↓` move, `→`/`Enter` expand
-(everything starts collapsed), `←` collapse, `y` copy the selected session's
-`claude --resume` command, `q` quit.
+(everything starts collapsed), `←` collapse, `y` copy the selected session's resume
+command (the right one for its tool), `q` quit.
 
 Tips:
 - A **commit** is just a tiny bookmark (a pointer), not a copy — save as many as you like.
@@ -81,20 +86,22 @@ Tips:
 
 ## How it works (short version)
 
-A Claude Code session is just a file on disk. sily reads that file, slices it at the
-point you choose, and writes a new valid session you can resume — all without calling
-any API. Your commits live in `~/.sily/`.
+Each tool keeps its sessions on disk — Claude Code and Codex as JSONL files, OpenCode
+in a SQLite database. sily reads those, slices a session at the point you choose, and
+produces a new session you can resume — all without calling any API. Your commits
+(tiny pointers) live in `~/.sily/`.
 
-Built in Rust as a clean core + pluggable adapters. `sily list` shows sessions from
-**Claude Code**, **Codex CLI** (`~/.codex/sessions`), and **OpenCode** (its SQLite
-database) together in one tree.
+Built in Rust as a clean core + pluggable adapters, one per tool.
 
-Commit / branch / revert:
-- **Claude Code** — full support (writes a new `.jsonl`; `claude --resume`).
-- **Codex CLI** — full support (writes a new rollout; `codex resume`). Branch points
-  are message numbers (`--at 3`).
-- **OpenCode** — branch/revert via OpenCode's own `export`/`import` (no direct DB
-  writes); branch points are message ids. Experimental — verify the result.
+| Tool | List / browse | Commit / branch / revert | Branch point | Resume |
+|------|:---:|:---:|------|--------|
+| **Claude Code** | ✅ | ✅ | message id | `claude --resume <id>` |
+| **Codex CLI** | ✅ | ✅ | message number (`--at 3`) | `codex resume <id>` |
+| **OpenCode** | ✅ | ✅ (experimental, via its own `export`/`import`) | message id | `opencode --session <id>` |
+
+Where each tool's data lives: Claude `~/.claude`, Codex `~/.codex/sessions`, OpenCode
+its SQLite db (`~/.local/share/opencode`). Override with `SILY_CLAUDE_HOME`,
+`SILY_CODEX_HOME`, `SILY_OPENCODE_DB`.
 
 ---
 
