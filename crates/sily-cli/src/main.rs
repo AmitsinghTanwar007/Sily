@@ -269,9 +269,24 @@ fn run(cli: Cli) -> Result<(), CliError> {
             let msgs = ctx.provider_for(&session)?.messages(&session)?;
             let commits: Vec<Commit> =
                 ctx.commits.all()?.into_iter().filter(|c| c.session_id == session).collect();
-            let branches: Vec<BranchRecord> =
-                ctx.branches.all()?.into_iter().filter(|b| b.from_session == session).collect();
-            print!("{}", graph::session_graph(&session, &msgs, &commits, &branches, limit));
+            // each branch as a lane: its divergent messages after the shared prefix
+            let mut gbs: Vec<graph::GraphBranch> = Vec::new();
+            for b in ctx.branches.all()?.into_iter().filter(|b| b.from_session == session) {
+                let bm = ctx
+                    .provider_for(&b.session_id)
+                    .ok()
+                    .and_then(|p| p.messages(&b.session_id).ok())
+                    .unwrap_or_default();
+                let common = msgs
+                    .iter()
+                    .zip(bm.iter())
+                    .take_while(|(a, c)| a.role == c.role && a.text == c.text)
+                    .count();
+                let fork_point = if common > 0 { msgs[common - 1].point.clone() } else { String::new() };
+                let tail = bm.into_iter().skip(common).collect();
+                gbs.push(graph::GraphBranch { id: short(&b.session_id), origin: b.origin, fork_point, tail });
+            }
+            print!("{}", graph::session_graph(&session, &msgs, &commits, &gbs, limit));
         }
         Cmd::Commit { session, name, message, at } => cmd_commit(&ctx, session, name, message, at)?,
         Cmd::Commits => cmd_commits(&ctx)?,

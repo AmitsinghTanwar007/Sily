@@ -131,7 +131,12 @@ impl Provider for GeminiProvider {
             let mut n = 0;
             for e in entries.into_iter().filter(|e| e.session_id == id) {
                 n += 1;
-                points.push(MsgPoint { point: n.to_string(), role: Role::User, text: e.message });
+                points.push(MsgPoint {
+                    point: n.to_string(),
+                    role: Role::User,
+                    text: e.message,
+                    time: String::new(),
+                });
             }
             if !points.is_empty() {
                 return Ok(points);

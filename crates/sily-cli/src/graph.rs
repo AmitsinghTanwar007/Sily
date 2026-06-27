@@ -87,25 +87,47 @@ fn meaningful(text: &str) -> bool {
         && t != "No response requested"
 }
 
-/// GitHub-style rail graph of ONE session: the message timeline as a trunk, with
-/// commits (`◆`) and branches (`○`) splitting off at the exact point they were
-/// made. `limit` shows the last N trunk nodes.
+/// A branch to draw as a parallel lane: its id, how it was made, the main point
+/// it forked at, and its (raw) divergent messages.
+pub struct GraphBranch {
+    pub id: String,
+    pub origin: String,
+    /// The main message point this branch forked from (last shared message).
+    pub fork_point: String,
+    pub tail: Vec<MsgPoint>,
+}
+
+/// A node placed on the lane graph.
+#[derive(Clone)]
+struct GRow {
+    time: String,
+    lane: usize,
+    role: Role,
+    text: String,
+    point: String,
+    is_main: bool,
+}
+
+/// True multi-lane rail graph (git/gitgraph.nvim style): the main timeline is
+/// lane 0; each branch runs in its own parallel lane, opening at the message it
+/// forked from. Rows are time-ordered (newest first) so lanes interleave.
 pub fn session_graph(
     id: &str,
-    msgs: &[MsgPoint],
+    main_raw: &[MsgPoint],
     commits: &[Commit],
-    branches: &[BranchRecord],
+    branches: &[GraphBranch],
     limit: Option<usize>,
 ) -> String {
-    if msgs.is_empty() {
-        return "(no messages)\n".to_string();
+    let main: Vec<&MsgPoint> = main_raw.iter().filter(|m| meaningful(&m.text)).collect();
+    if main.is_empty() {
+        return "(no conversation — only system/command messages)\n".to_string();
     }
-    // Map every message → the meaningful message it displays under, so forks
-    // anchored at a noise message (e.g. "/exit") still show on a real node.
-    let first_meaningful = msgs.iter().find(|m| meaningful(&m.text)).map(|m| m.point.clone());
+
+    // commits anchored to a meaningful main message
+    let first_meaningful = main_raw.iter().find(|m| meaningful(&m.text)).map(|m| m.point.clone());
     let mut anchor: HashMap<String, String> = HashMap::new();
     let mut last: Option<String> = None;
-    for m in msgs {
+    for m in main_raw {
         if meaningful(&m.text) {
             last = Some(m.point.clone());
         }
@@ -114,75 +136,152 @@ pub fn session_graph(
             last.clone().or_else(|| first_meaningful.clone()).unwrap_or_else(|| m.point.clone()),
         );
     }
-    let last_raw = msgs.last().map(|m| m.point.clone()).unwrap_or_default();
+    let last_raw = main_raw.last().map(|m| m.point.clone()).unwrap_or_default();
     let anch = |raw: &str| anchor.get(raw).cloned().unwrap_or_else(|| raw.to_string());
-
     let mut commit_at: HashMap<String, Vec<&Commit>> = HashMap::new();
     for c in commits {
         let raw = if c.message_uuid.is_empty() { last_raw.clone() } else { c.message_uuid.clone() };
         commit_at.entry(anch(&raw)).or_default().push(c);
     }
-    let mut branch_at: HashMap<String, Vec<&BranchRecord>> = HashMap::new();
-    for b in branches {
-        let raw = if b.at_message.is_empty() { last_raw.clone() } else { b.at_message.clone() };
-        branch_at.entry(anch(&raw)).or_default().push(b);
-    }
 
-    let real: Vec<&MsgPoint> = msgs.iter().filter(|m| meaningful(&m.text)).collect();
-    if real.is_empty() {
-        return "(no conversation — only system/command messages)\n".to_string();
+    // rows = main (lane 0) + each branch's divergent messages (lane i+1)
+    let mut rows: Vec<GRow> = main
+        .iter()
+        .map(|m| GRow { time: m.time.clone(), lane: 0, role: m.role, text: m.text.clone(), point: m.point.clone(), is_main: true })
+        .collect();
+    let mut empty_branches: Vec<&GraphBranch> = Vec::new();
+    let mut fork_pts: Vec<String> = vec![String::new()]; // lane-indexed fork point
+    for b in branches {
+        let tail: Vec<&MsgPoint> = b.tail.iter().filter(|m| meaningful(&m.text)).collect();
+        if tail.is_empty() {
+            empty_branches.push(b);
+            continue;
+        }
+        let lane = fork_pts.len();
+        fork_pts.push(anch(&b.fork_point));
+        for m in &tail {
+            rows.push(GRow { time: m.time.clone(), lane, role: m.role, text: m.text.clone(), point: String::new(), is_main: false });
+        }
     }
+    rows.sort_by(|a, b| b.time.cmp(&a.time)); // newest first
+    let total = rows.len();
     let start = match limit {
-        Some(n) if real.len() > n => real.len() - n,
+        Some(n) if total > n => total - n,
         _ => 0,
     };
-    let mut out = String::new();
-    out.push_str(&format!(
+    let shown: Vec<GRow> = rows[start..].to_vec();
+    let n = shown.len();
+    let maxlane = shown.iter().map(|r| r.lane).max().unwrap_or(0);
+
+    let main_idxs: Vec<usize> = (0..n).filter(|&i| shown[i].lane == 0).collect();
+    let (m_first, m_last) = (main_idxs.first().copied().unwrap_or(0), main_idxs.last().copied().unwrap_or(0));
+    let mut head = vec![usize::MAX; maxlane + 1];
+    let mut fork = vec![usize::MAX; maxlane + 1];
+    for l in 1..=maxlane {
+        let idxs: Vec<usize> = (0..n).filter(|&i| shown[i].lane == l).collect();
+        if idxs.is_empty() {
+            continue;
+        }
+        head[l] = *idxs.iter().min().unwrap();
+        // fork = the main row at this branch's fork point (last shared message);
+        // fall back to the newest main not newer than the branch's oldest msg.
+        let fp = fork_pts.get(l).cloned().unwrap_or_default();
+        fork[l] = main_idxs
+            .iter()
+            .copied()
+            .find(|&mi| shown[mi].point == fp)
+            .or_else(|| {
+                let oldest = shown[*idxs.iter().max().unwrap()].time.clone();
+                main_idxs.iter().copied().find(|&mi| shown[mi].time <= oldest)
+            })
+            .unwrap_or(m_last);
+    }
+
+    let dim = |s: &str| s.if_supports_color(Stdout, |t| t.dimmed()).to_string();
+    let mut out = format!(
         "{} {}\n",
         "▲".if_supports_color(Stdout, |t| t.magenta()),
-        format!("{} (main line · newest first)", short(id))
+        format!("{} (newest first)", short(id))
             .if_supports_color(Stdout, |t| t.style(Style::new().magenta().bold())),
-    ));
-    let dim = |s: &str| s.if_supports_color(Stdout, |t| t.dimmed()).to_string();
-    // Newest first: head at top, older below.
-    let win = &real[start..];
-    for (k, m) in win.iter().rev().enumerate() {
+    );
+
+    for (r, row) in shown.iter().enumerate() {
+        let mut glyph = vec![' '; maxlane + 1];
+        let mut sep = vec![' '; maxlane + 1];
+        for (c, g) in glyph.iter_mut().enumerate() {
+            if row.lane == c {
+                *g = '●';
+            } else if c == 0 {
+                if r >= m_first && r <= m_last {
+                    *g = '│';
+                }
+            } else if head[c] != usize::MAX && r >= head[c] && r <= fork[c] {
+                *g = '│';
+            }
+        }
+        // fork connectors: a branch lane closes into the trunk on its fork row
+        for l in 1..=maxlane {
+            if head[l] != usize::MAX && fork[l] == r {
+                glyph[l] = '╯';
+                for g in glyph.iter_mut().take(l).skip(1) {
+                    *g = if *g == '│' { '┼' } else { '─' };
+                }
+                for s in sep.iter_mut().take(l) {
+                    *s = '─';
+                }
+            }
+        }
+        let mut rail = String::new();
+        for c in 0..=maxlane {
+            let g = glyph[c];
+            let gs = if g == '●' && row.lane == c {
+                if c == 0 {
+                    g.to_string().if_supports_color(Stdout, |t| t.bright_yellow()).to_string()
+                } else {
+                    g.to_string().if_supports_color(Stdout, |t| t.cyan()).to_string()
+                }
+            } else {
+                dim(&g.to_string())
+            };
+            rail.push_str(&gs);
+            rail.push_str(&dim(&sep[c].to_string()));
+        }
+        let label = if row.is_main {
+            let mut lbl = format!(
+                "{}  {}",
+                role_lbl(row.role).if_supports_color(Stdout, |t| t.dimmed()),
+                truncate(&row.text, 48)
+            );
+            for c in commit_at.get(row.point.as_str()).into_iter().flatten() {
+                lbl.push_str(&format!(
+                    "  {} {}",
+                    "◆".if_supports_color(Stdout, |t| t.green()),
+                    c.name.if_supports_color(Stdout, |t| t.style(Style::new().green().bold())),
+                ));
+            }
+            lbl
+        } else {
+            format!(
+                "{}  {}",
+                role_lbl(row.role).if_supports_color(Stdout, |t| t.cyan()),
+                truncate(&row.text, 40)
+            )
+        };
+        out.push_str(&format!("{rail} {label}\n"));
+    }
+
+    for b in &empty_branches {
         out.push_str(&format!(
             "{} {}  {}\n",
-            "●".if_supports_color(Stdout, |t| t.bright_yellow()),
-            role_lbl(m.role).if_supports_color(Stdout, |t| t.style(Style::new().bright_yellow().bold())),
-            truncate(&m.text, 60),
+            "○".if_supports_color(Stdout, |t| t.cyan()),
+            b.id.if_supports_color(Stdout, |t| t.style(Style::new().cyan().bold())),
+            format!("{} · no new conversation", b.origin).if_supports_color(Stdout, |t| t.dimmed()),
         ));
-        for c in commit_at.get(m.point.as_str()).into_iter().flatten() {
-            let note = match c.note.as_deref() {
-                Some(n) if !n.is_empty() => format!("  \"{n}\""),
-                _ => String::new(),
-            };
-            out.push_str(&format!(
-                "{}{} {}{}\n",
-                dim("├─"),
-                "◆".if_supports_color(Stdout, |t| t.green()),
-                c.name.if_supports_color(Stdout, |t| t.style(Style::new().green().bold())),
-                note.if_supports_color(Stdout, |t| t.dimmed()),
-            ));
-        }
-        for b in branch_at.get(m.point.as_str()).into_iter().flatten() {
-            out.push_str(&format!(
-                "{}{} {}  {}\n",
-                dim("├─"),
-                "○".if_supports_color(Stdout, |t| t.cyan()),
-                short(&b.session_id).if_supports_color(Stdout, |t| t.style(Style::new().cyan().bold())),
-                b.origin.if_supports_color(Stdout, |t| t.cyan()),
-            ));
-        }
-        if k != win.len() - 1 {
-            out.push_str(&format!("{}\n", dim("│")));
-        }
     }
     if start > 0 {
         out.push_str(&format!(
             "{}\n",
-            format!("┆ … {start} earlier messages (use --full)").if_supports_color(Stdout, |t| t.dimmed())
+            format!("┆ … {start} earlier (use --full)").if_supports_color(Stdout, |t| t.dimmed())
         ));
     }
     out

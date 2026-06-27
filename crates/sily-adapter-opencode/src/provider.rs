@@ -44,7 +44,12 @@ impl Provider for OpenCodeProvider {
     fn messages(&self, id: &str) -> Result<Vec<MsgPoint>> {
         Ok(message_points(id)?
             .into_iter()
-            .map(|(mid, role, text)| MsgPoint { point: mid, role: Role::from(role.as_str()), text })
+            .map(|(mid, role, text, time)| MsgPoint {
+                point: mid,
+                role: Role::from(role.as_str()),
+                text,
+                time,
+            })
             .collect())
     }
 

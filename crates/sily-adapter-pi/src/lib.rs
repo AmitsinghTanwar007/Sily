@@ -169,7 +169,12 @@ impl Provider for PiProvider {
         Ok(parsed
             .messages
             .into_iter()
-            .map(|m| MsgPoint { point: m.uuid, role: m.role, text: m.text })
+            .map(|m| MsgPoint {
+                point: m.uuid,
+                role: m.role,
+                text: m.text,
+                time: m.timestamp.unwrap_or_default(),
+            })
             .collect())
     }
 

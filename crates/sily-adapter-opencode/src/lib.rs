@@ -113,7 +113,7 @@ pub struct Branched {
 
 /// (message id, role, snippet) for each message, so a caller can choose a branch
 /// point. Uses `opencode export` (read-only).
-pub fn message_points(session_id: &str) -> Result<Vec<(String, String, String)>> {
+pub fn message_points(session_id: &str) -> Result<Vec<(String, String, String, String)>> {
     let json = export(session_id)?;
     let mut out = Vec::new();
     if let Some(msgs) = json.get("messages").and_then(Value::as_array) {
@@ -121,7 +121,13 @@ pub fn message_points(session_id: &str) -> Result<Vec<(String, String, String)>>
             let info = m.get("info");
             let id = info.and_then(|i| i.get("id")).and_then(Value::as_str).unwrap_or("").to_string();
             let role = info.and_then(|i| i.get("role")).and_then(Value::as_str).unwrap_or("").to_string();
-            out.push((id, role, message_text(m)));
+            let time = info
+                .and_then(|i| i.get("time"))
+                .and_then(|t| t.get("created"))
+                .and_then(Value::as_i64)
+                .map(|n| format!("{n:020}"))
+                .unwrap_or_default();
+            out.push((id, role, message_text(m), time));
         }
     }
     Ok(out)

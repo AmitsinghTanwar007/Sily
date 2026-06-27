@@ -19,6 +19,9 @@ pub struct MsgPoint {
     pub point: String,
     pub role: Role,
     pub text: String,
+    /// Sortable timestamp (ISO-8601, or zero-padded epoch) — used to interleave
+    /// lanes in the graph. Empty if the provider doesn't supply one.
+    pub time: String,
 }
 
 /// Result of creating or branching a session.

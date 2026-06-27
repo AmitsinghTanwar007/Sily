@@ -47,7 +47,12 @@ impl Provider for ClaudeProvider {
         let s = self.store_for(id)?.load(id)?;
         Ok(s.messages
             .into_iter()
-            .map(|m| MsgPoint { point: m.uuid, role: m.role, text: m.text })
+            .map(|m| MsgPoint {
+                point: m.uuid,
+                role: m.role,
+                text: m.text,
+                time: m.timestamp.unwrap_or_default(),
+            })
             .collect())
     }
 

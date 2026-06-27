@@ -141,7 +141,7 @@ fn file_session_id(path: &Path) -> Option<String> {
 
 /// Index (1-based) → display snippet for each user/assistant message, so a caller
 /// can pick a branch point (Codex messages have no ids).
-pub fn message_points(codex_home: &Path, id: &str) -> Result<Vec<(usize, String, String)>> {
+pub fn message_points(codex_home: &Path, id: &str) -> Result<Vec<(usize, String, String, String)>> {
     let path = find_session_file(codex_home, id)
         .ok_or_else(|| Error::SessionNotFound(id.to_string()))?;
     let text = fs::read_to_string(&path)?;
@@ -157,7 +157,8 @@ pub fn message_points(codex_home: &Path, id: &str) -> Result<Vec<(usize, String,
                 .and_then(|p| p.get("content"))
                 .map(extract_text)
                 .unwrap_or_default();
-            points.push((idx, role, text));
+            let time = v.get("timestamp").and_then(Value::as_str).unwrap_or("").to_string();
+            points.push((idx, role, text, time));
         }
     }
     Ok(points)

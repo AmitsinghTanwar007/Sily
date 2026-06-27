@@ -49,7 +49,12 @@ impl Provider for CodexProvider {
     fn messages(&self, id: &str) -> Result<Vec<MsgPoint>> {
         Ok(message_points(&self.home, id)?
             .into_iter()
-            .map(|(idx, role, text)| MsgPoint { point: idx.to_string(), role: role_of(&role), text })
+            .map(|(idx, role, text, time)| MsgPoint {
+                point: idx.to_string(),
+                role: role_of(&role),
+                text,
+                time,
+            })
             .collect())
     }
 
