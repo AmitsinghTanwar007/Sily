@@ -10,7 +10,8 @@ use std::time::SystemTime;
 
 use owo_colors::{OwoColorize, Stream::Stdout, Style};
 
-use sily_core::model::{BranchRecord, Commit};
+use sily_core::model::{BranchRecord, Commit, Role};
+use sily_core::provider::MsgPoint;
 use sily_core::store::{ProjectSessions, SessionRef};
 
 /// Render the full tree across all providers and projects (`sily list`).
@@ -65,6 +66,93 @@ fn render_provider(
             out.push_str(&"│\n".if_supports_color(Stdout, |t| t.dimmed()).to_string());
         }
     }
+}
+
+fn role_lbl(r: Role) -> &'static str {
+    match r {
+        Role::User => "user",
+        Role::Assistant => "asst",
+        Role::System => "sys ",
+        Role::Other => "····",
+    }
+}
+
+/// GitHub-style rail graph of ONE session: the message timeline as a trunk, with
+/// commits (`◆`) and branches (`○`) splitting off at the exact point they were
+/// made. `limit` shows the last N trunk nodes.
+pub fn session_graph(
+    id: &str,
+    msgs: &[MsgPoint],
+    commits: &[Commit],
+    branches: &[BranchRecord],
+    limit: Option<usize>,
+) -> String {
+    if msgs.is_empty() {
+        return "(no messages)\n".to_string();
+    }
+    let last_point = msgs.last().map(|m| m.point.as_str()).unwrap_or("");
+
+    let mut commit_at: HashMap<&str, Vec<&Commit>> = HashMap::new();
+    for c in commits {
+        let key = if c.message_uuid.is_empty() { last_point } else { c.message_uuid.as_str() };
+        commit_at.entry(key).or_default().push(c);
+    }
+    let mut branch_at: HashMap<&str, Vec<&BranchRecord>> = HashMap::new();
+    for b in branches {
+        let key = if b.at_message.is_empty() { last_point } else { b.at_message.as_str() };
+        branch_at.entry(key).or_default().push(b);
+    }
+
+    let start = match limit {
+        Some(n) if msgs.len() > n => msgs.len() - n,
+        _ => 0,
+    };
+    let mut out = String::new();
+    out.push_str(&format!(
+        "{} {}\n",
+        "▲".if_supports_color(Stdout, |t| t.magenta()),
+        format!("{} (main line)", short(id)).if_supports_color(Stdout, |t| t.style(Style::new().magenta().bold())),
+    ));
+    if start > 0 {
+        out.push_str(&format!(
+            "{}\n",
+            format!("┆ … {start} earlier messages (use --full)").if_supports_color(Stdout, |t| t.dimmed())
+        ));
+    }
+    let dim = |s: &str| s.if_supports_color(Stdout, |t| t.dimmed()).to_string();
+    for (i, m) in msgs[start..].iter().enumerate() {
+        let is_last = start + i == msgs.len() - 1;
+        out.push_str(&format!(
+            "{} {}  {}  {}\n",
+            "●".if_supports_color(Stdout, |t| t.bright_yellow()),
+            short(&m.point).if_supports_color(Stdout, |t| t.style(Style::new().bright_yellow().bold())),
+            role_lbl(m.role).if_supports_color(Stdout, |t| t.dimmed()),
+            truncate(&m.text, 56),
+        ));
+        for c in commit_at.get(m.point.as_str()).into_iter().flatten() {
+            let note = c.note.as_deref().unwrap_or("");
+            out.push_str(&format!(
+                "{}{} {}  {}\n",
+                dim("├─"),
+                "◆".if_supports_color(Stdout, |t| t.green()),
+                c.name.if_supports_color(Stdout, |t| t.style(Style::new().green().bold())),
+                format!("\"{note}\"").if_supports_color(Stdout, |t| t.dimmed()),
+            ));
+        }
+        for b in branch_at.get(m.point.as_str()).into_iter().flatten() {
+            out.push_str(&format!(
+                "{}{} {}  {}\n",
+                dim("├─"),
+                "○".if_supports_color(Stdout, |t| t.cyan()),
+                short(&b.session_id).if_supports_color(Stdout, |t| t.style(Style::new().cyan().bold())),
+                b.origin.if_supports_color(Stdout, |t| t.cyan()),
+            ));
+        }
+        if !is_last {
+            out.push_str(&format!("{}\n", dim("│")));
+        }
+    }
+    out
 }
 
 fn latest(sessions: &[SessionRef]) -> Option<SystemTime> {

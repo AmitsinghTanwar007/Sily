@@ -107,6 +107,13 @@ enum Cmd {
         #[arg(short, long)]
         full: bool,
     },
+    /// GitHub-style rail graph: the session's timeline with branches/commits
+    /// splitting off at the exact point they were made.
+    Graph {
+        session: String,
+        #[arg(short, long)]
+        full: bool,
+    },
     /// Save a commit (a named pointer) at a session's HEAD or a chosen point.
     Commit {
         session: String,
@@ -256,6 +263,15 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 Some(s) => print!("{}", render::tree(&s, limit)),
                 None => print_messages(p.messages(&session)?, limit),
             }
+        }
+        Cmd::Graph { session, full } => {
+            let limit = if full { None } else { Some(DEFAULT_LIMIT) };
+            let msgs = ctx.provider_for(&session)?.messages(&session)?;
+            let commits: Vec<Commit> =
+                ctx.commits.all()?.into_iter().filter(|c| c.session_id == session).collect();
+            let branches: Vec<BranchRecord> =
+                ctx.branches.all()?.into_iter().filter(|b| b.from_session == session).collect();
+            print!("{}", graph::session_graph(&session, &msgs, &commits, &branches, limit));
         }
         Cmd::Commit { session, name, message, at } => cmd_commit(&ctx, session, name, message, at)?,
         Cmd::Commits => cmd_commits(&ctx)?,

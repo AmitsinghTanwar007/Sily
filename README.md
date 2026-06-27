@@ -65,6 +65,7 @@ is ever lost.
 | `sily log <session>` | Show recent messages (last 8; `--full` for all) |
 | `sily log <session> -p` | Show only *your* prompts (skip assistant/tools/noise) |
 | `sily tree <session>` | Show recent branch structure (last 8; `--full` for all) |
+| `sily graph <session>` | GitHub-style rail: branches/commits split off the timeline at their exact point |
 | `sily commit <session> [-m note] [--name x] [--at <msg>]` | Save a point you can return to |
 | `sily commits` | List your saved points |
 | `sily branch <session> [--at <msg>]` | Make a new session from any point |
