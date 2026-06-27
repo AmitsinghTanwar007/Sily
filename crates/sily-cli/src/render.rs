@@ -48,6 +48,10 @@ pub fn log(session: &Session) -> String {
 /// (more than one child) and leaves marked.
 pub fn tree(session: &Session) -> String {
     let mut out = String::new();
+    out.push_str(
+        "legend: ┳ fork   │ reply   ○ leaf   [sub] sub-agent sidechain\n\
+         (each left-edge node is a separate root: a session start or a compaction boundary)\n\n",
+    );
     let roots: Vec<&Message> = session
         .messages
         .iter()
@@ -76,15 +80,25 @@ fn render_node(session: &Session, msg: &Message, depth: usize, out: &mut String)
     } else {
         "│"
     };
+    let tag = if is_sidechain(msg) { " [sub]" } else { "" };
     out.push_str(&format!(
-        "{}{} {}  {}  {}\n",
+        "{}{} {}  {}{}  {}\n",
         "  ".repeat(depth),
         marker,
         short(&msg.uuid),
         role_tag(&msg.role),
+        tag,
         snippet(&msg.text, 60)
     ));
     for child in children {
         render_node(session, child, depth + 1, out);
     }
+}
+
+/// Claude marks sub-agent (Task) messages with `isSidechain: true` in the record.
+fn is_sidechain(msg: &Message) -> bool {
+    msg.extra
+        .get("isSidechain")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
