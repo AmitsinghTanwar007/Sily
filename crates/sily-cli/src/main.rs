@@ -319,6 +319,11 @@ fn cmd_commit(
     message: Option<String>,
     at: Option<String>,
 ) -> Result<(), CliError> {
+    // A commit must have a message.
+    let note = match message {
+        Some(m) if !m.trim().is_empty() => m.trim().to_string(),
+        _ => return Err(CliError::Msg("a commit needs a message — use -m \"your note\"".into())),
+    };
     let p = ctx.provider_for(&session)?;
     let point = match at {
         Some(a) => {
@@ -335,13 +340,18 @@ fn cmd_commit(
             .unwrap_or_default(),
     };
     let existing = ctx.commits.all()?;
+    // Nothing to commit: this session already has a commit at this exact point.
+    if existing.iter().any(|c| c.session_id == session && c.message_uuid == point) {
+        println!("nothing to commit — this point is already committed");
+        return Ok(());
+    }
     let name = name.unwrap_or_else(|| format!("c{}", existing.len() + 1));
     ctx.commits.add(Commit {
         name: name.clone(),
         session_id: session,
         message_uuid: point.clone(),
         created_at: now_iso(),
-        note: message,
+        note: Some(note),
     })?;
     let label = if point.is_empty() { "HEAD".to_string() } else { short(&point) };
     println!("committed '{name}' at {label}");
