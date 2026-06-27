@@ -79,11 +79,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// List sessions in the current project (or all projects with --all).
+    /// List sessions as a tree of every project (use --here for just this folder).
     List {
-        /// Show every project under the Claude home as a tree.
+        /// Show only the current directory's project (flat list).
         #[arg(long)]
-        all: bool,
+        here: bool,
     },
     /// Print the linear history of a session.
     Log { session: String },
@@ -186,18 +186,18 @@ fn run(cli: Cli) -> Result<(), CliError> {
     }
     let ctx = build_ctx(cli.cwd)?;
     match cli.cmd {
-        Cmd::List { all } => {
+        Cmd::List { here } => {
             let commits = ctx.commits.all()?;
             let branches = ctx.branches.all()?;
-            if all {
+            if here {
+                let sessions = ctx.store.list()?;
+                print!("{}", graph::render_list(&sessions, &commits, &branches));
+            } else {
                 let projects = sily_adapter_claude::list_all_projects(&ctx.claude_home)?;
                 print!(
                     "{}",
                     graph::render_all("claude-code", &projects, &commits, &branches)
                 );
-            } else {
-                let sessions = ctx.store.list()?;
-                print!("{}", graph::render_list(&sessions, &commits, &branches));
             }
         }
 

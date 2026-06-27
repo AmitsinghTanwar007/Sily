@@ -55,8 +55,8 @@ is ever lost.
 
 | Command | What it does |
 |---------|--------------|
-| `sily list` | List sessions in the current folder |
-| `sily list --all` | Tree of every project and its sessions |
+| `sily list` | Tree of every project and its sessions |
+| `sily list --here` | Just the current folder's sessions |
 | `sily log <session>` | Show a session's messages |
 | `sily tree <session>` | Show a session's branch structure |
 | `sily commit <session> [-m note] [--name x] [--at <msg>]` | Save a point you can return to |
