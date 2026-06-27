@@ -43,11 +43,47 @@ install -m 0755 "$tmp/sily" "$BIN_DIR/sily"
 echo "sily: installed to $BIN_DIR/sily"
 "$BIN_DIR/sily" --version || true
 
+# If the bin dir is already reachable, we're done.
 case ":$PATH:" in
-    *":$BIN_DIR:"*) ;;
-    *)
-        echo
-        echo "Add $BIN_DIR to your PATH to run 'sily' directly:"
-        echo "  export PATH=\"$BIN_DIR:\$PATH\""
+    *":$BIN_DIR:"*)
+        echo "sily: ready — run 'sily list' to get started."
+        exit 0
         ;;
 esac
+
+# Otherwise, add it to the right shell profile automatically (idempotent).
+shell_name=$(basename "${SHELL:-sh}")
+rc=""
+added=0
+
+case "$shell_name" in
+    fish)
+        rc="$HOME/.config/fish/config.fish"
+        mkdir -p "$(dirname "$rc")"
+        if ! { [ -f "$rc" ] && grep -qF "$BIN_DIR" "$rc"; }; then
+            printf '\n# added by sily installer\nfish_add_path %s\n' "$BIN_DIR" >> "$rc"
+            added=1
+        fi
+        ;;
+    *)
+        case "$shell_name" in
+            zsh) rc="$HOME/.zshrc" ;;
+            bash) rc="$HOME/.bashrc" ;;
+            *) rc="$HOME/.profile" ;;
+        esac
+        if ! { [ -f "$rc" ] && grep -qF "$BIN_DIR" "$rc"; }; then
+            printf '\n# added by sily installer\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$rc"
+            added=1
+        fi
+        ;;
+esac
+
+echo
+if [ "$added" -eq 1 ]; then
+    echo "sily: added $BIN_DIR to your PATH in $rc"
+    echo "      Run this now (or just open a new terminal) to use 'sily':"
+    echo "        source \"$rc\""
+else
+    echo "sily: $BIN_DIR is configured in $rc but not active in this shell."
+    echo "      Open a new terminal, or run:  source \"$rc\""
+fi
