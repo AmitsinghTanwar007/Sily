@@ -44,14 +44,10 @@ pub fn log(session: &Session) -> String {
     out
 }
 
-/// Branch tree: every message, indented under its parent, with branch points
-/// (more than one child) and leaves marked.
+/// Branch tree. Linear stretches stay flat (no growing indent); indentation only
+/// increases at real forks. Each fragment (a session start or a compaction
+/// boundary) begins with `●` and a blank-line separator.
 pub fn tree(session: &Session) -> String {
-    let mut out = String::new();
-    out.push_str(
-        "legend: ┳ fork   │ reply   ○ leaf   [sub] sub-agent sidechain\n\
-         (each left-edge node is a separate root: a session start or a compaction boundary)\n\n",
-    );
     let roots: Vec<&Message> = session
         .messages
         .iter()
@@ -62,23 +58,32 @@ pub fn tree(session: &Session) -> String {
                 .unwrap_or(true)
         })
         .collect();
-    for root in roots {
-        render_node(session, root, 0, &mut out);
+
+    if roots.is_empty() {
+        return "(empty session)\n".to_string();
     }
-    if out.is_empty() {
-        out.push_str("(empty session)\n");
+
+    let mut out = String::new();
+    out.push_str("legend: ● start   │ reply   ┳ fork   ○ leaf   [sub] sub-agent\n\n");
+    for (i, root) in roots.iter().enumerate() {
+        if i > 0 {
+            out.push('\n'); // separate fragments
+        }
+        render_node(session, root, 0, true, &mut out);
     }
     out
 }
 
-fn render_node(session: &Session, msg: &Message, depth: usize, out: &mut String) {
+fn render_node(session: &Session, msg: &Message, depth: usize, is_root: bool, out: &mut String) {
     let children = session.children(&msg.uuid);
-    let marker = if children.len() > 1 {
-        "┳" // branch point
+    let marker = if is_root {
+        "●" // fragment start
+    } else if children.len() > 1 {
+        "┳" // fork
     } else if children.is_empty() {
         "○" // leaf
     } else {
-        "│"
+        "│" // linear reply
     };
     let tag = if is_sidechain(msg) { " [sub]" } else { "" };
     out.push_str(&format!(
@@ -90,8 +95,16 @@ fn render_node(session: &Session, msg: &Message, depth: usize, out: &mut String)
         tag,
         snippet(&msg.text, 60)
     ));
-    for child in children {
-        render_node(session, child, depth + 1, out);
+    match children.as_slice() {
+        [] => {}
+        // Linear: keep the same indent so a straight chain reads as a flat list.
+        [only] => render_node(session, only, depth, false, out),
+        // Real fork: indent each branch.
+        many => {
+            for child in many {
+                render_node(session, child, depth + 1, false, out);
+            }
+        }
     }
 }
 
