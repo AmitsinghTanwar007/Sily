@@ -20,8 +20,10 @@
 
 mod convert;
 mod encode;
+mod provider;
 mod store;
 
 pub use convert::PROVIDER;
 pub use encode::encode_cwd;
+pub use provider::ClaudeProvider;
 pub use store::{list_all_projects, locate, ClaudeStore, ProjectSessions};

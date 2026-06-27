@@ -890,17 +890,18 @@ dependencies = [
 
 [[package]]
 name = "sily-adapter-claude"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "serde",
  "serde_json",
  "sily-core",
  "tempfile",
+ "uuid",
 ]
 
 [[package]]
 name = "sily-adapter-codex"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "chrono",
  "serde_json",
@@ -909,8 +910,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sily-adapter-gemini"
+version = "0.11.0"
+dependencies = [
+ "serde_json",
+ "sily-core",
+]
+
+[[package]]
 name = "sily-adapter-opencode"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "rusqlite",
  "serde_json",
@@ -919,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "sily-cli"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "chrono",
  "clap",
@@ -930,6 +939,7 @@ dependencies = [
  "serde_json",
  "sily-adapter-claude",
  "sily-adapter-codex",
+ "sily-adapter-gemini",
  "sily-adapter-opencode",
  "sily-core",
  "uuid",
@@ -937,7 +947,7 @@ dependencies = [
 
 [[package]]
 name = "sily-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "serde",
  "serde_json",

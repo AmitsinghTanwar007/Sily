@@ -17,6 +17,9 @@ use sily_core::store::{ProjectSessions, SessionRef};
 
 pub const PROVIDER: &str = "codex-cli";
 
+mod provider;
+pub use provider::CodexProvider;
+
 /// Enumerate every Codex session under `<codex_home>/sessions/`, grouped by cwd.
 pub fn list_all_projects(codex_home: &Path) -> Result<Vec<ProjectSessions>> {
     let sessions_dir = codex_home.join("sessions");

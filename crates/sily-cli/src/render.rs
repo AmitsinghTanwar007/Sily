@@ -33,57 +33,6 @@ pub fn is_real_prompt(text: &str) -> bool {
     !t.is_empty() && !t.starts_with('<') && !t.starts_with("[Request interrupted")
 }
 
-/// Just the user's prompts, in order — skips assistant turns, tool calls,
-/// sidechains, and command/caveat noise. `limit` shows only the last N.
-pub fn prompts(session: &Session, limit: Option<usize>) -> String {
-    let all: Vec<&Message> = session
-        .messages
-        .iter()
-        .filter(|m| matches!(m.role, Role::User) && is_real_prompt(&m.text))
-        .collect();
-    if all.is_empty() {
-        return "(no user prompts)\n".to_string();
-    }
-    let start = match limit {
-        Some(n) if all.len() > n => all.len() - n,
-        _ => 0,
-    };
-    let mut out = String::new();
-    if start > 0 {
-        out.push_str(&format!("… {start} earlier prompts (use --full to see all)\n"));
-    }
-    for (i, m) in all[start..].iter().enumerate() {
-        out.push_str(&format!("{:>3}. {}\n", start + i + 1, snippet(&m.text, 100)));
-    }
-    out
-}
-
-/// Linear history in append-log (file) order — how Claude itself reads the
-/// session. `limit` shows only the last N messages (None = all).
-pub fn log(session: &Session, limit: Option<usize>) -> String {
-    let msgs = &session.messages;
-    if msgs.is_empty() {
-        return "(empty session)\n".to_string();
-    }
-    let start = match limit {
-        Some(n) if msgs.len() > n => msgs.len() - n,
-        _ => 0,
-    };
-    let mut out = String::new();
-    if start > 0 {
-        out.push_str(&format!("… {start} earlier messages (use --full to see all)\n"));
-    }
-    for m in &msgs[start..] {
-        out.push_str(&format!(
-            "{}  {}  {}\n",
-            short(&m.uuid),
-            role_tag(&m.role),
-            snippet(&m.text, 80)
-        ));
-    }
-    out
-}
-
 /// Branch tree. Linear stretches stay flat (no growing indent); indentation only
 /// increases at real forks. Each fragment (a session start or a compaction
 /// boundary) begins with `●` and a blank-line separator.

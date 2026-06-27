@@ -15,6 +15,9 @@ pub enum Error {
     #[error("session not found: {0}")]
     SessionNotFound(String),
 
+    #[error("not supported by {0}")]
+    Unsupported(String),
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 

@@ -1,0 +1,11 @@
+[package]
+name = "sily-adapter-gemini"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Gemini CLI adapter for sily: lists sessions from ~/.gemini/tmp/*/logs.json."
+
+[dependencies]
+sily-core = { path = "../sily-core" }
+serde_json = { workspace = true }

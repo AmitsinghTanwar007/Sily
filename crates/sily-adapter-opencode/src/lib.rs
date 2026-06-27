@@ -17,6 +17,9 @@ use sily_core::store::{ProjectSessions, SessionRef};
 
 pub const PROVIDER: &str = "opencode";
 
+mod provider;
+pub use provider::OpenCodeProvider;
+
 fn io_err(e: impl std::fmt::Display) -> Error {
     Error::Io(std::io::Error::other(e.to_string()))
 }

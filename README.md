@@ -93,17 +93,23 @@ in a SQLite database. sily reads those, slices a session at the point you choose
 produces a new session you can resume — all without calling any API. Your commits
 (tiny pointers) live in `~/.sily/`.
 
-Built in Rust as a clean core + pluggable adapters, one per tool.
+Built in Rust as a clean core + pluggable adapters. Every tool is **one
+`impl Provider`** (a trait in `sily-core`), so the CLI is identical across tools and
+adding a new one is a single adapter crate.
 
 | Tool | List / browse | Commit / branch / revert | Branch point | Resume |
 |------|:---:|:---:|------|--------|
 | **Claude Code** | ✅ | ✅ | message id | `claude --resume <id>` |
 | **Codex CLI** | ✅ | ✅ | message number (`--at 3`) | `codex resume <id>` |
 | **OpenCode** | ✅ | ✅ (experimental, via its own `export`/`import`) | message id | `opencode --session <id>` |
+| **Gemini CLI** | ✅ | — | — | `gemini --resume` |
+
+Gemini is listing-only: its `logs.json` records **only user prompts**, so sily shows
+those (no assistant turns or branching).
 
 Where each tool's data lives: Claude `~/.claude`, Codex `~/.codex/sessions`, OpenCode
-its SQLite db (`~/.local/share/opencode`). Override with `SILY_CLAUDE_HOME`,
-`SILY_CODEX_HOME`, `SILY_OPENCODE_DB`.
+its SQLite db (`~/.local/share/opencode`), Gemini `~/.gemini/tmp/*/logs.json`. Override
+with `SILY_CLAUDE_HOME`, `SILY_CODEX_HOME`, `SILY_OPENCODE_DB`, `SILY_GEMINI_HOME`.
 
 ### Move a session between tools
 

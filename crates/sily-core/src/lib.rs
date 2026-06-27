@@ -16,9 +16,11 @@
 pub mod error;
 pub mod model;
 pub mod ops;
+pub mod provider;
 pub mod store;
 
 pub use error::{Error, Result};
 pub use model::{BranchRecord, Commit, Message, Role, Session, SessionMeta};
 pub use ops::{branch_at, diff, index_of, lineage, prefix_until, truncate_at, Divergence};
+pub use provider::{MsgPoint, NewSession, Provider};
 pub use store::{ProjectSessions, SessionRef, SessionStore};
