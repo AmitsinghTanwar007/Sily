@@ -64,6 +64,7 @@ is ever lost.
 | `sily branch <session> [--at <msg>]` | Make a new session from any point |
 | `sily revert <commit> [--hard]` | Go back to a saved point (default: keeps old version) |
 | `sily diff <a> <b>` | Show where two sessions differ |
+| `sily update` | Update sily to the latest release |
 
 Tips:
 - A **commit** is just a tiny bookmark (a pointer), not a copy — save as many as you like.

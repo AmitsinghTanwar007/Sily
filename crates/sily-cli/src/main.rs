@@ -8,6 +8,7 @@ mod branchstore;
 mod commitstore;
 mod graph;
 mod render;
+mod update;
 
 use std::process::ExitCode;
 
@@ -118,6 +119,8 @@ enum Cmd {
     },
     /// Show where two sessions diverge.
     Diff { a: String, b: String },
+    /// Update sily to the latest release.
+    Update,
 }
 
 fn main() -> ExitCode {
@@ -177,6 +180,10 @@ fn head_uuid(session: &sily_core::model::Session) -> Result<String, CliError> {
 }
 
 fn run(cli: Cli) -> Result<(), CliError> {
+    // `update` needs no session context.
+    if let Cmd::Update = cli.cmd {
+        return update::run().map_err(CliError::Msg);
+    }
     let ctx = build_ctx(cli.cwd)?;
     match cli.cmd {
         Cmd::List { all } => {
@@ -322,6 +329,9 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("only in {}: {} messages", &a[..a.len().min(8)], d.only_a.len());
             println!("only in {}: {} messages", &b[..b.len().min(8)], d.only_b.len());
         }
+
+        // Handled before ctx is built.
+        Cmd::Update => unreachable!(),
     }
     Ok(())
 }
