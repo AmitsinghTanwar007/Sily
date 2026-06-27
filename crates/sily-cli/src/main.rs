@@ -8,7 +8,10 @@ mod branchstore;
 mod commitstore;
 mod graph;
 mod render;
+mod tui;
 mod update;
+
+use std::io::IsTerminal;
 
 use std::process::ExitCode;
 
@@ -194,10 +197,19 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 print!("{}", graph::render_list(&sessions, &commits, &branches));
             } else {
                 let projects = sily_adapter_claude::list_all_projects(&ctx.claude_home)?;
-                print!(
-                    "{}",
-                    graph::render_all("claude-code", &projects, &commits, &branches)
-                );
+                // Interactive when attached to a terminal; static tree when piped.
+                if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
+                    if let Some(cmd) = tui::run(&projects, &commits, &branches)
+                        .map_err(|e| CliError::Msg(e.to_string()))?
+                    {
+                        println!("{cmd}");
+                    }
+                } else {
+                    print!(
+                        "{}",
+                        graph::render_all("claude-code", &projects, &commits, &branches)
+                    );
+                }
             }
         }
 

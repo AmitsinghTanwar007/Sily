@@ -55,8 +55,8 @@ is ever lost.
 
 | Command | What it does |
 |---------|--------------|
-| `sily list` | Tree of every project and its sessions |
-| `sily list --here` | Just the current folder's sessions |
+| `sily list` | Interactive collapsible tree of all projects (static when piped) |
+| `sily list --here` | Just the current folder's sessions (static) |
 | `sily log <session>` | Show a session's messages |
 | `sily tree <session>` | Show a session's branch structure |
 | `sily commit <session> [-m note] [--name x] [--at <msg>]` | Save a point you can return to |
@@ -65,6 +65,10 @@ is ever lost.
 | `sily revert <commit> [--hard]` | Go back to a saved point (default: keeps old version) |
 | `sily diff <a> <b>` | Show where two sessions differ |
 | `sily update` | Update sily to the latest release |
+
+In the interactive `sily list` (in a terminal): `↑`/`↓` move, `→`/`Enter` expand
+(everything starts collapsed), `←` collapse, `y` copy the selected session's
+`claude --resume` command, `q` quit.
 
 Tips:
 - A **commit** is just a tiny bookmark (a pointer), not a copy — save as many as you like.
