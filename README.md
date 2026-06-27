@@ -76,8 +76,10 @@ is ever lost.
 | `sily update` | Update sily to the latest release |
 
 In the interactive `sily list` (in a terminal): browse the tree on the left and the
-**selected session's graph** shows on the right — the timeline newest-first, with each
-branch's work in a **parallel lane** from its fork point.
+**selected session's conversation** shows on the right — newest-first, **noise
+filtered** (no `/exit`, `/compact`, tool/system plumbing), with each branch's new
+conversation in a **parallel lane** from its fork point. Speakers are labelled
+`you` / `ai`.
 Keys: `↑`/`↓` move, `→`/`Enter` expand (everything starts collapsed), `←` collapse,
 `y` copy the selected session's resume command, `r` reload (pick up changes made
 elsewhere), `q` quit.

@@ -14,6 +14,7 @@ use crate::store::ProjectSessions;
 /// One message plus the opaque identifier you'd branch/commit at. The meaning of
 /// `point` is provider-specific (Claude: message uuid, Codex: 1-based index,
 /// OpenCode/Gemini: message id) — the CLI treats it as an opaque token.
+#[derive(Clone)]
 pub struct MsgPoint {
     pub point: String,
     pub role: Role,

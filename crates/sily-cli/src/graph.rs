@@ -70,11 +70,21 @@ fn render_provider(
 
 fn role_lbl(r: Role) -> &'static str {
     match r {
-        Role::User => "user",
-        Role::Assistant => "asst",
-        Role::System => "sys ",
-        Role::Other => "····",
+        Role::User => "you",
+        Role::Assistant => "ai ",
+        Role::System => "sys",
+        Role::Other => "·  ",
     }
+}
+
+/// A real, human turn — not command/tool/system plumbing or empty filler.
+fn meaningful(text: &str) -> bool {
+    let t = text.trim();
+    !t.is_empty()
+        && !t.starts_with('<')
+        && !t.starts_with("[Request interrupted")
+        && t != "No response requested."
+        && t != "No response requested"
 }
 
 /// GitHub-style rail graph of ONE session: the message timeline as a trunk, with
@@ -90,21 +100,40 @@ pub fn session_graph(
     if msgs.is_empty() {
         return "(no messages)\n".to_string();
     }
-    let last_point = msgs.last().map(|m| m.point.as_str()).unwrap_or("");
+    // Map every message → the meaningful message it displays under, so forks
+    // anchored at a noise message (e.g. "/exit") still show on a real node.
+    let first_meaningful = msgs.iter().find(|m| meaningful(&m.text)).map(|m| m.point.clone());
+    let mut anchor: HashMap<String, String> = HashMap::new();
+    let mut last: Option<String> = None;
+    for m in msgs {
+        if meaningful(&m.text) {
+            last = Some(m.point.clone());
+        }
+        anchor.insert(
+            m.point.clone(),
+            last.clone().or_else(|| first_meaningful.clone()).unwrap_or_else(|| m.point.clone()),
+        );
+    }
+    let last_raw = msgs.last().map(|m| m.point.clone()).unwrap_or_default();
+    let anch = |raw: &str| anchor.get(raw).cloned().unwrap_or_else(|| raw.to_string());
 
-    let mut commit_at: HashMap<&str, Vec<&Commit>> = HashMap::new();
+    let mut commit_at: HashMap<String, Vec<&Commit>> = HashMap::new();
     for c in commits {
-        let key = if c.message_uuid.is_empty() { last_point } else { c.message_uuid.as_str() };
-        commit_at.entry(key).or_default().push(c);
+        let raw = if c.message_uuid.is_empty() { last_raw.clone() } else { c.message_uuid.clone() };
+        commit_at.entry(anch(&raw)).or_default().push(c);
     }
-    let mut branch_at: HashMap<&str, Vec<&BranchRecord>> = HashMap::new();
+    let mut branch_at: HashMap<String, Vec<&BranchRecord>> = HashMap::new();
     for b in branches {
-        let key = if b.at_message.is_empty() { last_point } else { b.at_message.as_str() };
-        branch_at.entry(key).or_default().push(b);
+        let raw = if b.at_message.is_empty() { last_raw.clone() } else { b.at_message.clone() };
+        branch_at.entry(anch(&raw)).or_default().push(b);
     }
 
+    let real: Vec<&MsgPoint> = msgs.iter().filter(|m| meaningful(&m.text)).collect();
+    if real.is_empty() {
+        return "(no conversation — only system/command messages)\n".to_string();
+    }
     let start = match limit {
-        Some(n) if msgs.len() > n => msgs.len() - n,
+        Some(n) if real.len() > n => real.len() - n,
         _ => 0,
     };
     let mut out = String::new();
@@ -116,14 +145,13 @@ pub fn session_graph(
     ));
     let dim = |s: &str| s.if_supports_color(Stdout, |t| t.dimmed()).to_string();
     // Newest first: head at top, older below.
-    let win = &msgs[start..];
+    let win = &real[start..];
     for (k, m) in win.iter().rev().enumerate() {
         out.push_str(&format!(
-            "{} {}  {}  {}\n",
+            "{} {}  {}\n",
             "●".if_supports_color(Stdout, |t| t.bright_yellow()),
-            short(&m.point).if_supports_color(Stdout, |t| t.style(Style::new().bright_yellow().bold())),
-            role_lbl(m.role).if_supports_color(Stdout, |t| t.dimmed()),
-            truncate(&m.text, 56),
+            role_lbl(m.role).if_supports_color(Stdout, |t| t.style(Style::new().bright_yellow().bold())),
+            truncate(&m.text, 60),
         ));
         for c in commit_at.get(m.point.as_str()).into_iter().flatten() {
             let note = match c.note.as_deref() {
