@@ -78,8 +78,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// List sessions in the current project.
-    List,
+    /// List sessions in the current project (or all projects with --all).
+    List {
+        /// Show every project under the Claude home as a tree.
+        #[arg(long)]
+        all: bool,
+    },
     /// Print the linear history of a session.
     Log { session: String },
     /// Show the branch tree of a session.
@@ -131,6 +135,7 @@ struct Ctx {
     store: ClaudeStore,
     commits: CommitStore,
     branches: BranchStore,
+    claude_home: std::path::PathBuf,
 }
 
 fn now_iso() -> String {
@@ -155,9 +160,10 @@ fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
         None => std::env::current_dir()?.to_string_lossy().into_owned(),
     };
     Ok(Ctx {
-        store: ClaudeStore::new(claude_home, cwd),
+        store: ClaudeStore::new(&claude_home, cwd),
         commits: CommitStore::new(&sily_home),
         branches: BranchStore::new(&sily_home),
+        claude_home,
     })
 }
 
@@ -173,11 +179,19 @@ fn head_uuid(session: &sily_core::model::Session) -> Result<String, CliError> {
 fn run(cli: Cli) -> Result<(), CliError> {
     let ctx = build_ctx(cli.cwd)?;
     match cli.cmd {
-        Cmd::List => {
-            let sessions = ctx.store.list()?;
+        Cmd::List { all } => {
             let commits = ctx.commits.all()?;
             let branches = ctx.branches.all()?;
-            print!("{}", graph::render_list(&sessions, &commits, &branches));
+            if all {
+                let projects = sily_adapter_claude::list_all_projects(&ctx.claude_home)?;
+                print!(
+                    "{}",
+                    graph::render_all("claude-code", &projects, &commits, &branches)
+                );
+            } else {
+                let sessions = ctx.store.list()?;
+                print!("{}", graph::render_list(&sessions, &commits, &branches));
+            }
         }
 
         Cmd::Log { session } => {

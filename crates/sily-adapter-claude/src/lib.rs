@@ -24,4 +24,4 @@ mod store;
 
 pub use convert::PROVIDER;
 pub use encode::encode_cwd;
-pub use store::ClaudeStore;
+pub use store::{list_all_projects, ClaudeStore, ProjectSessions};

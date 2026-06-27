@@ -12,6 +12,80 @@ use sily_core::store::{SessionRef, SessionStore};
 use crate::convert::{extract_text, message_to_record, record_to_message, rewrite_session_id, PROVIDER};
 use crate::encode::encode_cwd;
 
+/// All sessions found in one project folder, with the project's real cwd.
+pub struct ProjectSessions {
+    pub cwd: String,
+    pub sessions: Vec<SessionRef>,
+}
+
+/// Enumerate every project under `<claude_home>/projects/`, with its sessions.
+/// The real cwd is read from inside a session file (folder-name encoding is
+/// lossy and can't be reliably reversed).
+pub fn list_all_projects(claude_home: &Path) -> Result<Vec<ProjectSessions>> {
+    let projects_dir = claude_home.join("projects");
+    let mut out = Vec::new();
+    let entries = match fs::read_dir(&projects_dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(Error::Io(e)),
+    };
+    for entry in entries {
+        let dir = entry?.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let mut cwd: Option<String> = None;
+        let mut sessions = Vec::new();
+        let files = match fs::read_dir(&dir) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        for f in files {
+            let path = f?.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if cwd.is_none() {
+                cwd = read_cwd(&path);
+            }
+            let modified = fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+            let (summary, message_count) = scan_session(&path);
+            sessions.push(SessionRef {
+                id: id.to_string(),
+                summary,
+                message_count,
+                modified,
+                meta: SessionMeta {
+                    cwd: cwd.clone(),
+                    provider: Some(PROVIDER.to_string()),
+                },
+            });
+        }
+        if sessions.is_empty() {
+            continue;
+        }
+        let cwd = cwd.unwrap_or_else(|| dir.file_name().unwrap_or_default().to_string_lossy().into_owned());
+        out.push(ProjectSessions { cwd, sessions });
+    }
+    Ok(out)
+}
+
+/// Read the `cwd` field from the first record that has one.
+fn read_cwd(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    for line in text.lines() {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if let Some(c) = v.get("cwd").and_then(Value::as_str) {
+                return Some(c.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// A store scoped to one project (one `cwd`) under a Claude home directory.
 pub struct ClaudeStore {
     /// The `projects/<encoded-cwd>` directory this store reads and writes.
