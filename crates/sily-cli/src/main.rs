@@ -82,11 +82,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// List sessions as a tree of every project (use --here for just this folder).
+    /// List sessions under the current directory as a tree (use --all for every project).
     List {
-        /// Show only the current directory's project (flat list).
+        /// Show every project on the machine, not just the current directory subtree.
         #[arg(long)]
-        here: bool,
+        all: bool,
     },
     /// Print the linear history of a session.
     Log { session: String },
@@ -138,12 +138,31 @@ fn main() -> ExitCode {
 }
 
 struct Ctx {
-    store: ClaudeStore,
     commits: CommitStore,
     branches: BranchStore,
     claude_home: std::path::PathBuf,
     codex_home: std::path::PathBuf,
     opencode_db: std::path::PathBuf,
+    /// The working directory `list` scopes to by default.
+    cwd: String,
+}
+
+/// Keep only projects whose cwd is at or under `base`; drop now-empty providers.
+fn scope_to_dir(
+    providers: Vec<(String, Vec<sily_core::store::ProjectSessions>)>,
+    base: &str,
+) -> Vec<(String, Vec<sily_core::store::ProjectSessions>)> {
+    let prefix = format!("{}/", base.trim_end_matches('/'));
+    providers
+        .into_iter()
+        .filter_map(|(name, projects)| {
+            let kept: Vec<_> = projects
+                .into_iter()
+                .filter(|p| p.cwd == base || p.cwd.starts_with(&prefix))
+                .collect();
+            (!kept.is_empty()).then_some((name, kept))
+        })
+        .collect()
 }
 
 /// Gather session listings from every supported provider, skipping ones that
@@ -211,12 +230,12 @@ fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
         None => std::env::current_dir()?.to_string_lossy().into_owned(),
     };
     Ok(Ctx {
-        store: ClaudeStore::new(&claude_home, cwd),
         commits: CommitStore::new(&sily_home),
         branches: BranchStore::new(&sily_home),
         claude_home,
         codex_home,
         opencode_db,
+        cwd,
     })
 }
 
@@ -285,24 +304,31 @@ fn run(cli: Cli) -> Result<(), CliError> {
     }
     let ctx = build_ctx(cli.cwd)?;
     match cli.cmd {
-        Cmd::List { here } => {
+        Cmd::List { all } => {
             let commits = ctx.commits.all()?;
             let branches = ctx.branches.all()?;
-            if here {
-                let sessions = ctx.store.list()?;
-                print!("{}", graph::render_list(&sessions, &commits, &branches));
-            } else {
-                let providers = gather_providers(&ctx);
-                // Interactive when attached to a terminal; static tree when piped.
-                if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-                    if let Some(cmd) = tui::run(&providers, &commits, &branches)
-                        .map_err(|e| CliError::Msg(e.to_string()))?
-                    {
-                        println!("{cmd}");
-                    }
+            let mut providers = gather_providers(&ctx);
+            if !all {
+                providers = scope_to_dir(providers, &ctx.cwd);
+            }
+            if providers.is_empty() {
+                if all {
+                    println!("(no sessions found)");
                 } else {
-                    print!("{}", graph::render_all(&providers, &commits, &branches));
+                    println!(
+                        "(no sessions under {} — use 'sily list --all' to see every project)",
+                        ctx.cwd
+                    );
                 }
+            } else if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
+                // Interactive when attached to a terminal; static tree when piped.
+                if let Some(cmd) = tui::run(&providers, &commits, &branches)
+                    .map_err(|e| CliError::Msg(e.to_string()))?
+                {
+                    println!("{cmd}");
+                }
+            } else {
+                print!("{}", graph::render_all(&providers, &commits, &branches));
             }
         }
 

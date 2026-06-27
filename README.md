@@ -60,8 +60,8 @@ is ever lost.
 
 | Command | What it does |
 |---------|--------------|
-| `sily list` | Interactive collapsible tree of all projects (static when piped) |
-| `sily list --here` | Just the current folder's sessions (static) |
+| `sily list` | Interactive tree of sessions under the current directory (static when piped) |
+| `sily list --all` | Every project on the machine |
 | `sily log <session>` | Show a session's messages |
 | `sily tree <session>` | Show a session's branch structure |
 | `sily commit <session> [-m note] [--name x] [--at <msg>]` | Save a point you can return to |

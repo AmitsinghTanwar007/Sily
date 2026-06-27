@@ -13,20 +13,6 @@ use owo_colors::{OwoColorize, Stream::Stdout, Style};
 use sily_core::model::{BranchRecord, Commit};
 use sily_core::store::{ProjectSessions, SessionRef};
 
-/// Render one project's session/branch graph (`sily list`).
-pub fn render_list(sessions: &[SessionRef], commits: &[Commit], branches: &[BranchRecord]) -> String {
-    if sessions.is_empty() {
-        return "(no sessions in this project)\n".to_string();
-    }
-    let ctx = Ctx::build(sessions, commits, branches);
-    let mut out = String::new();
-    for root in ctx.roots_sorted() {
-        render_session(&ctx, &root.id, "", &mut out);
-        out.push('\n');
-    }
-    out
-}
-
 /// Render the full tree across all providers and projects (`sily list`).
 pub fn render_all(
     providers: &[(String, Vec<ProjectSessions>)],
