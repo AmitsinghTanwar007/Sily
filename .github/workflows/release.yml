@@ -19,6 +19,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             asset: sily-linux-x86_64.tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: sily-linux-arm64.tar.gz
           - os: macos-14
             target: aarch64-apple-darwin
             asset: sily-macos-arm64.tar.gz

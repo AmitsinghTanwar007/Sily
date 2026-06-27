@@ -23,13 +23,6 @@ case "$arch" in
     *) echo "sily: unsupported architecture '$arch'" >&2; exit 1 ;;
 esac
 
-# Only macOS ships an arm64 build for now; Linux ships x86_64.
-if [ "$os_name" = linux ] && [ "$arch_name" != x86_64 ]; then
-    echo "sily: no prebuilt Linux binary for '$arch_name' yet." >&2
-    echo "      Build from source: cargo install --git https://github.com/$REPO sily-cli" >&2
-    exit 1
-fi
-
 asset="sily-${os_name}-${arch_name}.tar.gz"
 url="https://github.com/${REPO}/releases/latest/download/${asset}"
 
