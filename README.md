@@ -69,6 +69,7 @@ is ever lost.
 | `sily commits` | List your saved points |
 | `sily branch <session> [--at <msg>]` | Make a new session from any point |
 | `sily revert <commit> [--hard]` | Go back to a saved point (default: keeps old version) |
+| `sily merge <branch>` | Merge a branch's work back into its main (new combined session) |
 | `sily diff <a> <b>` | Show where two sessions differ |
 | `sily port <session>` | Copy a session's content into a new session in **another** tool (prompts for the target) |
 | `sily update` | Update sily to the latest release |
@@ -103,13 +104,15 @@ adding a new one is a single adapter crate.
 | **Codex CLI** | ✅ | ✅ | message number (`--at 3`) | `codex resume <id>` |
 | **OpenCode** | ✅ | ✅ (experimental, via its own `export`/`import`) | message id | `opencode --session <id>` |
 | **Gemini CLI** | ✅ | — | — | `gemini --resume` |
+| **Pi** | ✅ (incl. tree) | — | message id | `pi --resume <id>` |
 
-Gemini is listing-only: its `logs.json` records **only user prompts**, so sily shows
-those (no assistant turns or branching).
+Gemini is listing-only (its `logs.json` records only user prompts). Pi is read-only
+for now (full list/log/tree, but branch/port unverified).
 
 Where each tool's data lives: Claude `~/.claude`, Codex `~/.codex/sessions`, OpenCode
-its SQLite db (`~/.local/share/opencode`), Gemini `~/.gemini/tmp/*/logs.json`. Override
-with `SILY_CLAUDE_HOME`, `SILY_CODEX_HOME`, `SILY_OPENCODE_DB`, `SILY_GEMINI_HOME`.
+its SQLite db (`~/.local/share/opencode`), Gemini `~/.gemini/tmp/*/logs.json`, Pi
+`~/.pi/agent/sessions`. Override with `SILY_CLAUDE_HOME`, `SILY_CODEX_HOME`,
+`SILY_OPENCODE_DB`, `SILY_GEMINI_HOME`, `SILY_PI_DIR`.
 
 ### Move a session between tools
 

@@ -1,0 +1,11 @@
+[package]
+name = "sily-adapter-pi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Pi coding-agent adapter for sily: reads ~/.pi/agent/sessions JSONL sessions."
+
+[dependencies]
+sily-core = { path = "../sily-core" }
+serde_json = { workspace = true }

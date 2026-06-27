@@ -16,6 +16,7 @@ sily-adapter-claude = { path = "../sily-adapter-claude" }
 sily-adapter-codex = { path = "../sily-adapter-codex" }
 sily-adapter-opencode = { path = "../sily-adapter-opencode" }
 sily-adapter-gemini = { path = "../sily-adapter-gemini" }
+sily-adapter-pi = { path = "../sily-adapter-pi" }
 clap = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }

@@ -65,4 +65,11 @@ pub trait Provider {
     fn structured(&self, _id: &str) -> Result<Option<Session>> {
         Ok(None)
     }
+
+    /// Merge a branch back into `main`: produce a NEW session = `main`'s full
+    /// history followed by the branch's work after `at` (the point it forked
+    /// from). This is a replay/concatenation, not a semantic 3-way merge.
+    fn merge(&self, _main_id: &str, _branch_id: &str, _at: &str) -> Result<NewSession> {
+        Err(Error::Unsupported(format!("{}: merge", self.name())))
+    }
 }

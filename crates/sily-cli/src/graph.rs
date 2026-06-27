@@ -186,11 +186,18 @@ fn branch_label(child: Option<&&SessionRef>, b: &BranchRecord) -> String {
         Some(s) => meta(s.message_count, s.modified),
         None => "missing".to_string(),
     };
+    // Show where it forked from so the origin point is visible.
+    let from = if b.at_message.is_empty() {
+        "HEAD".to_string()
+    } else {
+        short(&b.at_message).to_string()
+    };
     format!(
-        "{} {}  {} · {}",
+        "{} {}  {} {} · {}",
         "○".if_supports_color(Stdout, |t| t.cyan()),
         short(&b.session_id).if_supports_color(Stdout, |t| t.style(Style::new().cyan().bold())),
         b.origin.if_supports_color(Stdout, |t| t.cyan()),
+        format!("(from {from})").if_supports_color(Stdout, |t| t.dimmed()),
         detail.if_supports_color(Stdout, |t| t.dimmed()),
     )
 }

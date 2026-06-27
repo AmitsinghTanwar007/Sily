@@ -183,10 +183,11 @@ fn convert_session(
     }
     // sily branches are always Claude Code sessions.
     for b in branches.iter().filter(|b| b.from_session == s.id) {
+        let from = if b.at_message.is_empty() { "HEAD".to_string() } else { short(&b.at_message).to_string() };
         children.push(tree.push(Node {
             kind: Kind::Branch,
             primary: short(&b.session_id).to_string(),
-            secondary: b.origin.clone(),
+            secondary: format!("{} (from {})", b.origin, from),
             meta: String::new(),
             resume: Some(resume_command("claude-code", &b.session_id)),
             children: Vec::new(),

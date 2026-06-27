@@ -25,6 +25,7 @@ use sily_adapter_claude::ClaudeProvider;
 use sily_adapter_codex::CodexProvider;
 use sily_adapter_gemini::GeminiProvider;
 use sily_adapter_opencode::OpenCodeProvider;
+use sily_adapter_pi::PiProvider;
 
 use branchstore::BranchStore;
 use commitstore::CommitStore;
@@ -133,6 +134,14 @@ enum Cmd {
     },
     /// Show where two sessions diverge (claude-code only).
     Diff { a: String, b: String },
+    /// Merge a branch back into its main (new session = main + the branch's work).
+    Merge {
+        /// The branch session to merge.
+        branch: String,
+        /// Main session to merge into (defaults to the branch's recorded origin).
+        #[arg(long)]
+        into: Option<String>,
+    },
     /// Copy a session's content into a NEW session in another AI tool.
     Port {
         session: String,
@@ -200,6 +209,7 @@ fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
     let codex_home = env("SILY_CODEX_HOME", home.join(".codex"));
     let opencode_db = env("SILY_OPENCODE_DB", sily_adapter_opencode::default_db_path(&home));
     let gemini_home = env("SILY_GEMINI_HOME", home.join(".gemini"));
+    let pi_dir = env("SILY_PI_DIR", home.join(".pi/agent/sessions"));
     let cwd = match cwd_override {
         Some(c) => c,
         None => std::env::current_dir()?.to_string_lossy().into_owned(),
@@ -209,6 +219,7 @@ fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
         Box::new(CodexProvider::new(codex_home)),
         Box::new(OpenCodeProvider::new(opencode_db)),
         Box::new(GeminiProvider::new(gemini_home)),
+        Box::new(PiProvider::new(pi_dir)),
     ];
     Ok(Ctx {
         commits: CommitStore::new(&sily_home),
@@ -251,6 +262,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Branch { session, at } => cmd_branch(&ctx, session, at)?,
         Cmd::Revert { commit, hard } => cmd_revert(&ctx, commit, hard)?,
         Cmd::Diff { a, b } => cmd_diff(&ctx, a, b)?,
+        Cmd::Merge { branch, into } => cmd_merge(&ctx, branch, into)?,
         Cmd::Port { session, to } => cmd_port(&ctx, session, to)?,
         Cmd::Update => unreachable!(),
     }
@@ -387,6 +399,38 @@ fn cmd_diff(ctx: &Ctx, a: String, b: String) -> Result<(), CliError> {
     }
     println!("only in {}: {} messages", short(&a), d.only_a.len());
     println!("only in {}: {} messages", short(&b), d.only_b.len());
+    Ok(())
+}
+
+fn cmd_merge(ctx: &Ctx, branch: String, into: Option<String>) -> Result<(), CliError> {
+    let rec = ctx
+        .branches
+        .all()?
+        .into_iter()
+        .find(|b| b.session_id == branch)
+        .ok_or_else(|| {
+            CliError::Msg(format!(
+                "'{}' isn't a sily branch (no recorded origin) — can't merge",
+                short(&branch)
+            ))
+        })?;
+    let main = into.unwrap_or_else(|| rec.from_session.clone());
+    let new = ctx.provider_for(&branch)?.merge(&main, &branch, &rec.at_message)?;
+    ctx.branches.add(BranchRecord {
+        session_id: new.id.clone(),
+        from_session: main.clone(),
+        at_message: rec.at_message.clone(),
+        origin: format!("merge of {}", short(&branch)),
+        created_at: now_iso(),
+    })?;
+    println!(
+        "merged {} into {} → session {} ({} messages)",
+        short(&branch),
+        short(&main),
+        new.id,
+        new.messages
+    );
+    println!("  resume with:  {}", new.resume);
     Ok(())
 }
 

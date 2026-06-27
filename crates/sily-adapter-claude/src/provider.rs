@@ -106,4 +106,32 @@ impl Provider for ClaudeProvider {
     fn structured(&self, id: &str) -> Result<Option<Session>> {
         Ok(Some(self.store_for(id)?.load(id)?))
     }
+
+    fn merge(&self, main_id: &str, branch_id: &str, at: &str) -> Result<NewSession> {
+        let main = self.store_for(main_id)?.load(main_id)?;
+        let branch = self.store_for(branch_id)?.load(branch_id)?;
+        // The branch's divergent work = its messages after the fork point `at`.
+        let cut = branch
+            .messages
+            .iter()
+            .position(|m| m.uuid == at)
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let tail = &branch.messages[cut..];
+
+        let id2 = new_id();
+        let mut merged = Session::new(&id2);
+        merged.meta = main.meta.clone();
+        merged.headers = main.headers.clone();
+        merged.messages = main.messages.clone();
+        merged.messages.extend(tail.iter().cloned());
+
+        let store = ClaudeStore::new(&self.home, merged.meta.cwd.clone().unwrap_or_default());
+        store.save(&merged)?;
+        Ok(NewSession {
+            id: id2.clone(),
+            resume: format!("claude --resume {id2}"),
+            messages: merged.messages.len(),
+        })
+    }
 }
