@@ -70,6 +70,7 @@ is ever lost.
 | `sily branch <session> [--at <msg>]` | Make a new session from any point |
 | `sily revert <commit> [--hard]` | Go back to a saved point (default: keeps old version) |
 | `sily diff <a> <b>` | Show where two sessions differ |
+| `sily port <session>` | Copy a session's content into a new session in **another** tool (prompts for the target) |
 | `sily update` | Update sily to the latest release |
 
 In the interactive `sily list` (in a terminal): `↑`/`↓` move, `→`/`Enter` expand
@@ -103,6 +104,20 @@ Built in Rust as a clean core + pluggable adapters, one per tool.
 Where each tool's data lives: Claude `~/.claude`, Codex `~/.codex/sessions`, OpenCode
 its SQLite db (`~/.local/share/opencode`). Override with `SILY_CLAUDE_HOME`,
 `SILY_CODEX_HOME`, `SILY_OPENCODE_DB`.
+
+### Move a session between tools
+
+`sily port <session>` copies a session's conversation into a **new session in a
+different tool** — e.g. continue a Codex session over in OpenCode:
+
+```bash
+sily port <codex-session-id>      # prompts: which provider? → opencode
+# → ported N messages → opencode session ...   resume with: opencode --session <id>
+```
+
+It carries the conversation as readable context (the new session opens knowing what
+happened); tool-specific execution state doesn't transfer. (`--to <provider>` skips
+the prompt; OpenCode target is experimental — verify the result.)
 
 ---
 

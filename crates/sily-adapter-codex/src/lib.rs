@@ -150,14 +150,11 @@ pub fn message_points(codex_home: &Path, id: &str) -> Result<Vec<(usize, String,
             idx += 1;
             let p = v.get("payload");
             let role = p.and_then(|p| p.get("role")).and_then(Value::as_str).unwrap_or("").to_string();
-            let snippet: String = p
+            let text = p
                 .and_then(|p| p.get("content"))
                 .map(extract_text)
-                .unwrap_or_default()
-                .chars()
-                .take(60)
-                .collect();
-            points.push((idx, role, snippet));
+                .unwrap_or_default();
+            points.push((idx, role, text));
         }
     }
     Ok(points)
@@ -222,6 +219,39 @@ pub fn branch(codex_home: &Path, id: &str, at: Option<usize>) -> Result<Branched
         resume: format!("codex resume {new_id}"),
         kept_messages: kept,
     })
+}
+
+/// Create a brand-new Codex session seeded with a single user message (used by
+/// cross-provider porting). Returns (new_id, resume command).
+pub fn create_session(codex_home: &Path, cwd: &str, first_user_text: &str) -> Result<(String, String)> {
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now();
+    let ts = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+
+    let meta = serde_json::json!({
+        "timestamp": ts,
+        "type": "session_meta",
+        "payload": { "id": new_id, "timestamp": ts, "cwd": cwd,
+                     "originator": "sily", "cli_version": "sily", "source": "sily" }
+    });
+    let msg = serde_json::json!({
+        "timestamp": ts,
+        "type": "response_item",
+        "payload": { "type": "message", "role": "user",
+                     "content": [ { "type": "input_text", "text": first_user_text } ] }
+    });
+
+    let dir = codex_home
+        .join("sessions")
+        .join(now.format("%Y").to_string())
+        .join(now.format("%m").to_string())
+        .join(now.format("%d").to_string());
+    fs::create_dir_all(&dir)?;
+    let fname = format!("rollout-{}-{}.jsonl", now.format("%Y-%m-%dT%H-%M-%S"), new_id);
+    let body = format!("{}\n{}\n", serde_json::to_string(&meta)?, serde_json::to_string(&msg)?);
+    fs::write(dir.join(fname), body)?;
+
+    Ok((new_id.clone(), format!("codex resume {new_id}")))
 }
 
 /// Destructive: truncate the original session file at the `at`-th message.

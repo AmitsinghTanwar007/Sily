@@ -118,8 +118,7 @@ pub fn message_points(session_id: &str) -> Result<Vec<(String, String, String)>>
             let info = m.get("info");
             let id = info.and_then(|i| i.get("id")).and_then(Value::as_str).unwrap_or("").to_string();
             let role = info.and_then(|i| i.get("role")).and_then(Value::as_str).unwrap_or("").to_string();
-            let snippet = message_text(m).chars().take(60).collect();
-            out.push((id, role, snippet));
+            out.push((id, role, message_text(m)));
         }
     }
     Ok(out)
@@ -178,6 +177,52 @@ pub fn branch(session_id: &str, at_msg: Option<&str>) -> Result<Branched> {
     let new_id = find_new_session_id(&combined, session_id);
     let resume = new_id.as_ref().map(|i| format!("opencode --session {i}"));
     Ok(Branched { new_id, resume, kept_messages: kept })
+}
+
+/// Create a new OpenCode session seeded with a single user message, via
+/// `opencode import` (no direct DB writes). Returns the new id + resume command.
+pub fn create_session(directory: &str, first_user_text: &str) -> Result<Branched> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let doc = serde_json::json!({
+        "info": {
+            "directory": directory,
+            "title": "Ported by sily",
+            "version": "sily",
+            "time": { "created": now_ms, "updated": now_ms }
+        },
+        "messages": [
+            {
+                "info": { "role": "user", "time": { "created": now_ms } },
+                "parts": [ { "type": "text", "text": first_user_text } ]
+            }
+        ]
+    });
+
+    let tmp = std::env::temp_dir().join(format!("sily-oc-port-{}.json", std::process::id()));
+    std::fs::write(&tmp, serde_json::to_string(&doc).map_err(io_err)?)?;
+    let out = Command::new("opencode")
+        .arg("import")
+        .arg(&tmp)
+        .output()
+        .map_err(|e| io_err(format!("failed to run opencode import: {e}")))?;
+    let _ = std::fs::remove_file(&tmp);
+    if !out.status.success() {
+        return Err(io_err(format!(
+            "opencode import failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let new_id = find_new_session_id(&combined, "");
+    let resume = new_id.as_ref().map(|i| format!("opencode --session {i}"));
+    Ok(Branched { new_id, resume, kept_messages: 1 })
 }
 
 fn export(session_id: &str) -> Result<Value> {

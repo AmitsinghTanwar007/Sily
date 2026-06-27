@@ -138,6 +138,13 @@ enum Cmd {
     },
     /// Show where two sessions diverge.
     Diff { a: String, b: String },
+    /// Copy a session's content into a NEW session in another AI tool.
+    Port {
+        session: String,
+        /// Target provider (claude-code | codex-cli | opencode). Prompts if omitted.
+        #[arg(long)]
+        to: Option<String>,
+    },
     /// Update sily to the latest release.
     Update,
 }
@@ -275,7 +282,126 @@ fn print_user_prompts(points: Vec<(String, String)>, limit: Option<usize>) {
         println!("… {start} earlier prompts (use --full to see all)");
     }
     for (i, p) in prompts[start..].iter().enumerate() {
-        println!("{:>3}. {p}", start + i + 1);
+        println!("{:>3}. {}", start + i + 1, clip(p, 100));
+    }
+}
+
+/// Read a session's conversation as (role, full-text) pairs, from any provider,
+/// dropping empties and user-side noise (env context, command/caveat wrappers).
+fn read_transcript(ctx: &Ctx, id: &str) -> Result<Vec<(String, String)>, CliError> {
+    let raw: Vec<(String, String)> = match detect_provider(ctx, id) {
+        "codex-cli" => sily_adapter_codex::message_points(&ctx.codex_home, id)?
+            .into_iter()
+            .map(|(_, r, t)| (r, t))
+            .collect(),
+        "opencode" => sily_adapter_opencode::message_points(id)?
+            .into_iter()
+            .map(|(_, r, t)| (r, t))
+            .collect(),
+        _ => {
+            use sily_core::model::Role;
+            let s = claude_store_for(ctx, id)?.load(id)?;
+            s.messages
+                .iter()
+                .filter(|m| matches!(m.role, Role::User | Role::Assistant))
+                .map(|m| (role_str(m.role), m.text.clone()))
+                .collect()
+        }
+    };
+    Ok(raw
+        .into_iter()
+        .filter(|(role, text)| {
+            let t = text.trim();
+            if t.is_empty() {
+                return false;
+            }
+            // Keep all assistant turns; drop user-side noise (env/command wrappers).
+            role != "user" || render::is_real_prompt(t)
+        })
+        .collect())
+}
+
+fn role_str(r: sily_core::model::Role) -> String {
+    use sily_core::model::Role::*;
+    match r {
+        User => "user",
+        Assistant => "assistant",
+        System => "system",
+        Other => "other",
+    }
+    .to_string()
+}
+
+/// Build the context message that seeds the new (cross-provider) session.
+fn build_context(source: &str, id: &str, transcript: &[(String, String)]) -> String {
+    let mut s = format!(
+        "[Context ported by sily from a {source} session ({})]\n\n\
+         The following is a prior AI coding conversation. Continue the work from where it left off.\n\n\
+         --- transcript ---\n",
+        &id[..id.len().min(8)]
+    );
+    let mut total = 0usize;
+    for (role, text) in transcript {
+        let body: String = if role == "assistant" && text.chars().count() > 800 {
+            let mut t: String = text.chars().take(800).collect();
+            t.push('…');
+            t
+        } else {
+            text.clone()
+        };
+        let line = format!("{}: {}\n\n", role.to_uppercase(), body.trim());
+        if total + line.len() > 40_000 {
+            s.push_str("[… earlier transcript truncated by sily …]\n");
+            break;
+        }
+        total += line.len();
+        s.push_str(&line);
+    }
+    s.push_str("--- end transcript ---\n");
+    s
+}
+
+/// Interactively ask which provider to port into.
+fn choose_provider() -> Result<&'static str, CliError> {
+    use std::io::Write;
+    if !std::io::stdin().is_terminal() {
+        return Err(CliError::Msg(
+            "not a terminal — pass --to <claude-code|codex-cli|opencode>".into(),
+        ));
+    }
+    println!("Port to which provider?");
+    println!("  1) claude-code");
+    println!("  2) codex-cli");
+    println!("  3) opencode");
+    print!("> ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| CliError::Msg(e.to_string()))?;
+    normalize_provider(line.trim())
+}
+
+fn normalize_provider(s: &str) -> Result<&'static str, CliError> {
+    match s.trim() {
+        "1" | "claude" | "claude-code" => Ok("claude-code"),
+        "2" | "codex" | "codex-cli" => Ok("codex-cli"),
+        "3" | "opencode" => Ok("opencode"),
+        other => Err(CliError::Msg(format!(
+            "unknown provider '{other}' (use claude-code | codex-cli | opencode)"
+        ))),
+    }
+}
+
+/// Collapse whitespace and truncate to `n` chars for one-line display.
+fn clip(s: &str, n: usize) -> String {
+    let one = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one.chars().count() <= n {
+        one
+    } else {
+        let mut t: String = one.chars().take(n.saturating_sub(1)).collect();
+        t.push('…');
+        t
     }
 }
 
@@ -293,7 +419,7 @@ fn print_points(points: Vec<(usize, String, String)>, limit: Option<usize>) {
         println!("… {start} earlier messages (use --full to see all)");
     }
     for (n, role, snippet) in &points[start..] {
-        println!("{n:>4}  {role:<9}  {snippet}");
+        println!("{n:>4}  {role:<9}  {}", clip(snippet, 80));
     }
 }
 
@@ -311,7 +437,7 @@ fn print_oc_points(points: Vec<(String, String, String)>, limit: Option<usize>) 
         println!("… {start} earlier messages (use --full to see all)");
     }
     for (id, role, snippet) in &points[start..] {
-        println!("{id}  {role:<9}  {snippet}");
+        println!("{id}  {role:<9}  {}", clip(snippet, 80));
     }
 }
 
@@ -606,6 +732,53 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
             println!("only in {}: {} messages", &a[..a.len().min(8)], d.only_a.len());
             println!("only in {}: {} messages", &b[..b.len().min(8)], d.only_b.len());
+        }
+
+        Cmd::Port { session, to } => {
+            let transcript = read_transcript(&ctx, &session)?;
+            if transcript.is_empty() {
+                return Err(CliError::Msg("no content to port from that session".into()));
+            }
+            let source = detect_provider(&ctx, &session);
+            let context = build_context(source, &session, &transcript);
+            let target = match to {
+                Some(t) => normalize_provider(&t)?,
+                None => choose_provider()?,
+            };
+            if target == source {
+                eprintln!("sily: note — porting into the same provider ({source}); use 'branch' for same-tool forks.");
+            }
+            match target {
+                "codex-cli" => {
+                    let (id, resume) =
+                        sily_adapter_codex::create_session(&ctx.codex_home, &ctx.cwd, &context)?;
+                    println!("ported {} messages → codex session {id}", transcript.len());
+                    println!("  resume with:  {resume}");
+                }
+                "opencode" => {
+                    let b = sily_adapter_opencode::create_session(&ctx.cwd, &context)?;
+                    println!("ported {} messages → opencode (experimental, verify):", transcript.len());
+                    print_opencode_branch(&b);
+                }
+                _ => {
+                    let new_id = new_session_id();
+                    let mut s = sily_core::model::Session::new(&new_id);
+                    s.meta.cwd = Some(ctx.cwd.clone());
+                    s.headers = vec![
+                        serde_json::json!({"type":"mode","mode":"normal","sessionId":new_id}),
+                        serde_json::json!({"type":"permission-mode","permissionMode":"default","sessionId":new_id}),
+                    ];
+                    s.messages.push(sily_core::model::Message::new(
+                        new_session_id(),
+                        None,
+                        sily_core::model::Role::User,
+                        context,
+                    ));
+                    ClaudeStore::new(&ctx.claude_home, ctx.cwd.clone()).save(&s)?;
+                    println!("ported {} messages → claude-code session {new_id}", transcript.len());
+                    println!("  resume with:  claude --resume {new_id}");
+                }
+            }
         }
 
         // Handled before ctx is built.
