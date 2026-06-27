@@ -3,7 +3,7 @@
 //! sessions → commits/branches. Everything starts collapsed; nodes expand on
 //! demand. Browse with the arrows; copy a session's resume command with `y`.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
@@ -94,6 +94,21 @@ fn build_tree(
 ) -> Tree {
     let mut tree = Tree { nodes: Vec::new(), roots: Vec::new() };
     for (name, projects) in providers {
+        // (count, modified) per session id, for showing branch sizes.
+        let info: HashMap<String, (usize, Option<SystemTime>)> = projects
+            .iter()
+            .flat_map(|p| p.sessions.iter())
+            .map(|s| (s.id.clone(), (s.message_count, s.modified)))
+            .collect();
+        // Sessions that are a branch-child of another (present) session — these
+        // are shown only nested under their origin, not also as top-level.
+        let mut is_child: HashSet<String> = HashSet::new();
+        for b in branches {
+            if info.contains_key(&b.session_id) && info.contains_key(&b.from_session) {
+                is_child.insert(b.session_id.clone());
+            }
+        }
+
         // path trie of this provider's project cwds
         let mut root = Trie::default();
         for p in projects {
@@ -115,7 +130,7 @@ fn build_tree(
 
         let mut top: Vec<usize> = Vec::new();
         for (seg, child) in &root.children {
-            top.push(convert_dir(&mut tree, format!("/{seg}"), child, commits, branches, name));
+            top.push(convert_dir(&mut tree, format!("/{seg}"), child, commits, branches, name, &is_child, &info));
         }
         tree.nodes[adapter].children = top;
     }
@@ -124,6 +139,7 @@ fn build_tree(
 
 /// Convert a trie node into a Dir node, compressing single-child empty chains
 /// (so `/home/x/Documents/y` shows as one label until it branches or has sessions).
+#[allow(clippy::too_many_arguments)]
 fn convert_dir(
     tree: &mut Tree,
     mut label: String,
@@ -131,6 +147,8 @@ fn convert_dir(
     commits: &[Commit],
     branches: &[BranchRecord],
     provider: &str,
+    is_child: &HashSet<String>,
+    info: &HashMap<String, (usize, Option<SystemTime>)>,
 ) -> usize {
     let mut cur = trie;
     while cur.sessions.is_empty() && cur.children.len() == 1 {
@@ -142,14 +160,17 @@ fn convert_dir(
     let mut children: Vec<usize> = Vec::new();
     let total_sessions = count_sessions(cur);
 
-    // sessions first (newest first), then sub-directories
+    // top-level sessions (newest first), skipping branch-children (shown nested)
     let mut sessions = cur.sessions.clone();
     sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
     for s in &sessions {
-        children.push(convert_session(tree, s, commits, branches, provider));
+        if is_child.contains(&s.id) {
+            continue;
+        }
+        children.push(convert_session(tree, s, commits, branches, provider, info));
     }
     for (k, child) in &cur.children {
-        children.push(convert_dir(tree, format!("{label}/{k}"), child, commits, branches, provider));
+        children.push(convert_dir(tree, format!("{label}/{k}"), child, commits, branches, provider, is_child, info));
     }
 
     tree.push(Node {
@@ -173,6 +194,7 @@ fn convert_session(
     commits: &[Commit],
     branches: &[BranchRecord],
     provider: &str,
+    info: &HashMap<String, (usize, Option<SystemTime>)>,
 ) -> usize {
     let mut children = Vec::new();
     for c in commits.iter().filter(|c| c.session_id == s.id) {
@@ -190,11 +212,12 @@ fn convert_session(
     // sily branches are always Claude Code sessions.
     for b in branches.iter().filter(|b| b.from_session == s.id) {
         let from = if b.at_message.is_empty() { "HEAD".to_string() } else { short(&b.at_message).to_string() };
+        let (cnt, modified) = info.get(&b.session_id).copied().unwrap_or((0, None));
         children.push(tree.push(Node {
             kind: Kind::Branch,
             primary: short(&b.session_id).to_string(),
             secondary: format!("{} (from {})", b.origin, from),
-            meta: String::new(),
+            meta: meta_line(cnt, modified),
             resume: Some(resume_command("claude-code", &b.session_id)),
             session_id: Some(b.session_id.clone()),
             children: Vec::new(),
