@@ -290,10 +290,13 @@ fn run(cli: Cli) -> Result<(), CliError> {
 fn cmd_list(ctx: &Ctx, all: bool) -> Result<(), CliError> {
     let commits = ctx.commits.all()?;
     let branches = ctx.branches.all()?;
-    let mut providers = ctx.listings();
-    if !all {
-        providers = scope_to_dir(providers, &ctx.cwd);
-    }
+    // Recomputes the (scoped) listings fresh — used for the initial view, the
+    // static output, and the interactive 'r' reload.
+    let relist = || {
+        let p = ctx.listings();
+        if all { p } else { scope_to_dir(p, &ctx.cwd) }
+    };
+    let providers = relist();
     if providers.is_empty() {
         if all {
             println!("(no sessions found)");
@@ -301,7 +304,7 @@ fn cmd_list(ctx: &Ctx, all: bool) -> Result<(), CliError> {
             println!("(no sessions under {} — use 'sily list --all' to see every project)", ctx.cwd);
         }
     } else if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-        if let Some(cmd) = tui::run(&providers, &ctx.providers, &commits, &branches)
+        if let Some(cmd) = tui::run(relist, &ctx.providers, &commits, &branches)
             .map_err(|e| CliError::Msg(e.to_string()))?
         {
             println!("{cmd}");

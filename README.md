@@ -79,7 +79,8 @@ In the interactive `sily list` (in a terminal): browse the tree on the left and 
 **selected session's graph** shows on the right — the timeline newest-first, with each
 branch's work in a **parallel lane** from its fork point.
 Keys: `↑`/`↓` move, `→`/`Enter` expand (everything starts collapsed), `←` collapse,
-`y` copy the selected session's resume command, `q` quit.
+`y` copy the selected session's resume command, `r` reload (pick up changes made
+elsewhere), `q` quit.
 
 Lists show **newest first** (`sily commits`, `sily log`).
 

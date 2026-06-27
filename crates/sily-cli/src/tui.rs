@@ -253,6 +253,18 @@ impl<'a> App<'a> {
         app
     }
 
+    /// Rebuild the tree from fresh listings and drop the graph cache, so changes
+    /// made elsewhere (e.g. continuing a session) show up without restarting.
+    fn reload(&mut self, listings: &[(String, Vec<ProjectSessions>)]) {
+        self.tree = build_tree(listings, self.commits, self.branches);
+        self.detail.clear();
+        for &r in &self.tree.roots {
+            self.expanded.insert(r);
+        }
+        self.recompute();
+        self.status = "reloaded".to_string();
+    }
+
     fn recompute(&mut self) {
         let mut out = Vec::new();
         let roots = self.tree.roots.clone();
@@ -474,21 +486,31 @@ fn rail_lines(
     out
 }
 
-pub fn run(
-    listings: &[(String, Vec<ProjectSessions>)],
+pub fn run<F>(
+    relist: F,
     registry: &[Box<dyn Provider>],
     commits: &[Commit],
     branches: &[BranchRecord],
-) -> std::io::Result<Option<String>> {
-    let tree = build_tree(listings, commits, branches);
-    let mut app = App::new(tree, registry, commits, branches);
+) -> std::io::Result<Option<String>>
+where
+    F: Fn() -> Vec<(String, Vec<ProjectSessions>)>,
+{
+    let listings = relist();
+    let mut app = App::new(build_tree(&listings, commits, branches), registry, commits, branches);
     let mut terminal = ratatui::init();
-    let result = event_loop(&mut terminal, &mut app);
+    let result = event_loop(&mut terminal, &mut app, &relist);
     ratatui::restore();
     result.map(|_| app.picked)
 }
 
-fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App<'_>) -> std::io::Result<()> {
+fn event_loop<F>(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App<'_>,
+    relist: &F,
+) -> std::io::Result<()>
+where
+    F: Fn() -> Vec<(String, Vec<ProjectSessions>)>,
+{
     loop {
         terminal.draw(|f| draw(f, app))?;
         if let Event::Key(key) = event::read()? {
@@ -511,6 +533,10 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App<'_>) -> std
                 KeyCode::Left | KeyCode::Char('h') => app.collapse_or_parent(),
                 KeyCode::Char('y') => {
                     app.copy_resume();
+                }
+                KeyCode::Char('r') => {
+                    let listings = relist();
+                    app.reload(&listings);
                 }
                 _ => {}
             }
@@ -560,7 +586,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App<'_>) {
     );
 
     let hint = if app.status.is_empty() {
-        "↑↓ move · →/Enter expand · ← collapse · y copy resume · q quit".to_string()
+        "↑↓ move · →/Enter expand · ← collapse · y copy resume · r reload · q quit".to_string()
     } else {
         app.status.clone()
     };
