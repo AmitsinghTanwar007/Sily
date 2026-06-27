@@ -403,23 +403,28 @@ fn cmd_diff(ctx: &Ctx, a: String, b: String) -> Result<(), CliError> {
 }
 
 fn cmd_merge(ctx: &Ctx, branch: String, into: Option<String>) -> Result<(), CliError> {
-    let rec = ctx
-        .branches
-        .all()?
-        .into_iter()
-        .find(|b| b.session_id == branch)
-        .ok_or_else(|| {
-            CliError::Msg(format!(
-                "'{}' isn't a sily branch (no recorded origin) — can't merge",
-                short(&branch)
-            ))
-        })?;
-    let main = into.unwrap_or_else(|| rec.from_session.clone());
-    let new = ctx.provider_for(&branch)?.merge(&main, &branch, &rec.at_message)?;
+    // Target: explicit --into (any session, incl. another branch), else the
+    // branch's recorded origin.
+    let main = match into {
+        Some(m) => m,
+        None => ctx
+            .branches
+            .all()?
+            .into_iter()
+            .find(|b| b.session_id == branch)
+            .map(|r| r.from_session)
+            .ok_or_else(|| {
+                CliError::Msg(format!(
+                    "no recorded origin for {} — pass --into <session> to choose what to merge into",
+                    short(&branch)
+                ))
+            })?,
+    };
+    let new = ctx.provider_for(&branch)?.merge(&main, &branch)?;
     ctx.branches.add(BranchRecord {
         session_id: new.id.clone(),
         from_session: main.clone(),
-        at_message: rec.at_message.clone(),
+        at_message: String::new(),
         origin: format!("merge of {}", short(&branch)),
         created_at: now_iso(),
     })?;

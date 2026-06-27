@@ -107,17 +107,18 @@ impl Provider for ClaudeProvider {
         Ok(Some(self.store_for(id)?.load(id)?))
     }
 
-    fn merge(&self, main_id: &str, branch_id: &str, at: &str) -> Result<NewSession> {
+    fn merge(&self, main_id: &str, branch_id: &str) -> Result<NewSession> {
         let main = self.store_for(main_id)?.load(main_id)?;
         let branch = self.store_for(branch_id)?.load(branch_id)?;
-        // The branch's divergent work = its messages after the fork point `at`.
-        let cut = branch
+        // Common ancestor = the shared message-uuid prefix of the two histories.
+        // The branch's divergent work is everything after it.
+        let common = main
             .messages
             .iter()
-            .position(|m| m.uuid == at)
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let tail = &branch.messages[cut..];
+            .zip(branch.messages.iter())
+            .take_while(|(a, b)| a.uuid == b.uuid)
+            .count();
+        let tail = &branch.messages[common..];
 
         let id2 = new_id();
         let mut merged = Session::new(&id2);

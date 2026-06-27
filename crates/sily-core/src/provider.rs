@@ -66,10 +66,12 @@ pub trait Provider {
         Ok(None)
     }
 
-    /// Merge a branch back into `main`: produce a NEW session = `main`'s full
-    /// history followed by the branch's work after `at` (the point it forked
-    /// from). This is a replay/concatenation, not a semantic 3-way merge.
-    fn merge(&self, _main_id: &str, _branch_id: &str, _at: &str) -> Result<NewSession> {
+    /// Merge `branch` into `main`: produce a NEW session = `main`'s full history
+    /// followed by `branch`'s work after their **common ancestor** (the shared
+    /// prefix of the two histories). This works for branch→main *and*
+    /// branch→branch (two forks off the same point combine onto the shared base).
+    /// It is a replay/concatenation, not a semantic 3-way merge.
+    fn merge(&self, _main_id: &str, _branch_id: &str) -> Result<NewSession> {
         Err(Error::Unsupported(format!("{}: merge", self.name())))
     }
 }

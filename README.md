@@ -69,7 +69,7 @@ is ever lost.
 | `sily commits` | List your saved points |
 | `sily branch <session> [--at <msg>]` | Make a new session from any point |
 | `sily revert <commit> [--hard]` | Go back to a saved point (default: keeps old version) |
-| `sily merge <branch>` | Merge a branch's work back into its main (new combined session) |
+| `sily merge <branch> [--into <session>]` | Combine a branch into its main — or into another branch via `--into` (shared base + both sides' work) |
 | `sily diff <a> <b>` | Show where two sessions differ |
 | `sily port <session>` | Copy a session's content into a new session in **another** tool (prompts for the target) |
 | `sily update` | Update sily to the latest release |
