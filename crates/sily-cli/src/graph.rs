@@ -108,19 +108,54 @@ struct GRow {
     is_main: bool,
 }
 
-/// True multi-lane rail graph (git/gitgraph.nvim style): the main timeline is
+/// One rail-column glyph: a node on the trunk, a node on a branch, or a dim
+/// structural character (`│ ╯ ─ ┼` or space).
+pub enum RailCell {
+    MainNode,
+    BranchNode,
+    Dim(char),
+}
+
+/// One laid-out graph row: its rail prefix plus the labels to its right.
+pub struct RowOut {
+    pub cells: Vec<RailCell>,
+    pub is_main: bool,
+    pub role: Role,
+    pub text: String,
+    pub commits: Vec<String>,
+    pub stubs: Vec<String>, // just-created branches forking at this node
+}
+
+/// A fully laid-out graph, ready to render to ANSI (`sily graph`) or ratatui
+/// (the interactive detail pane).
+pub struct GraphLayout {
+    pub id: String,
+    pub rows: Vec<RowOut>,
+    pub bottom_empties: Vec<(String, String)>, // (id, origin) whose fork is off-screen
+    pub earlier: usize,
+    pub empty_note: Option<String>,
+}
+
+/// True multi-lane rail layout (git/gitgraph.nvim style): the main timeline is
 /// lane 0; each branch runs in its own parallel lane, opening at the message it
-/// forked from. Rows are time-ordered (newest first) so lanes interleave.
-pub fn session_graph(
+/// forked from. Rows are time-ordered (newest first) so lanes interleave. This
+/// is shared by `session_graph` (ANSI) and the TUI detail pane.
+pub fn session_layout(
     id: &str,
     main_raw: &[MsgPoint],
     commits: &[Commit],
     branches: &[GraphBranch],
     limit: Option<usize>,
-) -> String {
+) -> GraphLayout {
     let main: Vec<&MsgPoint> = main_raw.iter().filter(|m| meaningful(&m.text)).collect();
     if main.is_empty() {
-        return "(no conversation — only system/command messages)\n".to_string();
+        return GraphLayout {
+            id: short(id).to_string(),
+            rows: Vec::new(),
+            bottom_empties: Vec::new(),
+            earlier: 0,
+            empty_note: Some("(no conversation — only system/command messages)".to_string()),
+        };
     }
 
     // commits anchored to a meaningful main message
@@ -210,14 +245,7 @@ pub fn session_graph(
     let shown_points: std::collections::HashSet<&str> =
         shown.iter().filter(|r| r.is_main).map(|r| r.point.as_str()).collect();
 
-    let dim = |s: &str| s.if_supports_color(Stdout, |t| t.dimmed()).to_string();
-    let mut out = format!(
-        "{} {}\n",
-        "▲".if_supports_color(Stdout, |t| t.magenta()),
-        format!("{} (newest first)", short(id))
-            .if_supports_color(Stdout, |t| t.style(Style::new().magenta().bold())),
-    );
-
+    let mut out_rows: Vec<RowOut> = Vec::new();
     for (r, row) in shown.iter().enumerate() {
         let mut glyph = vec![' '; maxlane + 1];
         let mut sep = vec![' '; maxlane + 1];
@@ -244,68 +272,115 @@ pub fn session_graph(
                 }
             }
         }
-        let mut rail = String::new();
+        let mut cells: Vec<RailCell> = Vec::new();
         for c in 0..=maxlane {
             let g = glyph[c];
-            let gs = if g == '●' && row.lane == c {
-                if c == 0 {
-                    g.to_string().if_supports_color(Stdout, |t| t.bright_yellow()).to_string()
-                } else {
-                    g.to_string().if_supports_color(Stdout, |t| t.cyan()).to_string()
-                }
+            cells.push(if g == '●' && row.lane == c {
+                if c == 0 { RailCell::MainNode } else { RailCell::BranchNode }
             } else {
-                dim(&g.to_string())
-            };
-            rail.push_str(&gs);
-            rail.push_str(&dim(&sep[c].to_string()));
+                RailCell::Dim(g)
+            });
+            cells.push(RailCell::Dim(sep[c]));
         }
-        let label = if row.is_main {
-            let mut lbl = format!(
-                "{}  {}",
-                role_lbl(row.role).if_supports_color(Stdout, |t| t.dimmed()),
-                truncate(&row.text, 48)
-            );
-            for c in commit_at.get(row.point.as_str()).into_iter().flatten() {
-                lbl.push_str(&format!(
-                    "  {} {}",
-                    "◆".if_supports_color(Stdout, |t| t.green()),
-                    c.name.if_supports_color(Stdout, |t| t.style(Style::new().green().bold())),
-                ));
-            }
-            for eid in empty_at.get(row.point.as_str()).into_iter().flatten() {
-                lbl.push_str(&format!(
-                    "  {}{}",
-                    "╰○ ".if_supports_color(Stdout, |t| t.cyan()),
-                    eid.if_supports_color(Stdout, |t| t.style(Style::new().cyan().bold())),
-                ));
-            }
-            lbl
+        let commits_here: Vec<String> = if row.is_main {
+            commit_at
+                .get(row.point.as_str())
+                .into_iter()
+                .flatten()
+                .map(|c| match c.note.as_deref() {
+                    Some(n) if !n.is_empty() => format!("{}  \"{}\"", c.name, n),
+                    _ => c.name.clone(),
+                })
+                .collect()
         } else {
-            format!(
-                "{}  {}",
-                role_lbl(row.role).if_supports_color(Stdout, |t| t.cyan()),
-                truncate(&row.text, 40)
-            )
+            Vec::new()
         };
-        out.push_str(&format!("{rail} {label}\n"));
+        let stubs_here: Vec<String> = if row.is_main {
+            empty_at.get(row.point.as_str()).cloned().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        out_rows.push(RowOut {
+            cells,
+            is_main: row.is_main,
+            role: row.role,
+            text: row.text.clone(),
+            commits: commits_here,
+            stubs: stubs_here,
+        });
     }
 
-    // Any empty branch whose fork point isn't on screen falls back to a bottom note.
-    for b in &empty_branches {
-        if shown_points.contains(anch(&b.fork_point).as_str()) {
-            continue;
+    let bottom_empties: Vec<(String, String)> = empty_branches
+        .iter()
+        .filter(|b| !shown_points.contains(anch(&b.fork_point).as_str()))
+        .map(|b| (b.id.clone(), b.origin.clone()))
+        .collect();
+
+    GraphLayout { id: short(id).to_string(), rows: out_rows, bottom_empties, earlier: total - end, empty_note: None }
+}
+
+/// Render the lane layout to a colored string (`sily graph`).
+pub fn session_graph(
+    id: &str,
+    main_raw: &[MsgPoint],
+    commits: &[Commit],
+    branches: &[GraphBranch],
+    limit: Option<usize>,
+) -> String {
+    let lay = session_layout(id, main_raw, commits, branches, limit);
+    let dim = |s: &str| s.if_supports_color(Stdout, |t| t.dimmed()).to_string();
+    let mut out = format!(
+        "{} {}\n",
+        "▲".if_supports_color(Stdout, |t| t.magenta()),
+        format!("{} (newest first)", lay.id).if_supports_color(Stdout, |t| t.style(Style::new().magenta().bold())),
+    );
+    if let Some(note) = &lay.empty_note {
+        out.push_str(&format!("{note}\n"));
+        return out;
+    }
+    for row in &lay.rows {
+        let mut rail = String::new();
+        for cell in &row.cells {
+            match cell {
+                RailCell::MainNode => rail.push_str(&"●".if_supports_color(Stdout, |t| t.bright_yellow()).to_string()),
+                RailCell::BranchNode => rail.push_str(&"●".if_supports_color(Stdout, |t| t.cyan()).to_string()),
+                RailCell::Dim(c) => rail.push_str(&dim(&c.to_string())),
+            }
         }
+        let role = if row.is_main {
+            role_lbl(row.role).if_supports_color(Stdout, |t| t.dimmed()).to_string()
+        } else {
+            role_lbl(row.role).if_supports_color(Stdout, |t| t.cyan()).to_string()
+        };
+        let mut lbl = format!("{role}  {}", truncate(&row.text, if row.is_main { 48 } else { 40 }));
+        for c in &row.commits {
+            lbl.push_str(&format!(
+                "  {} {}",
+                "◆".if_supports_color(Stdout, |t| t.green()),
+                c.if_supports_color(Stdout, |t| t.style(Style::new().green().bold())),
+            ));
+        }
+        for eid in &row.stubs {
+            lbl.push_str(&format!(
+                "  {}{}",
+                "╰○ ".if_supports_color(Stdout, |t| t.cyan()),
+                eid.if_supports_color(Stdout, |t| t.style(Style::new().cyan().bold())),
+            ));
+        }
+        out.push_str(&format!("{rail} {lbl}\n"));
+    }
+    for (eid, origin) in &lay.bottom_empties {
         out.push_str(&format!(
             "{} {}  {}\n",
             "○".if_supports_color(Stdout, |t| t.cyan()),
-            b.id.if_supports_color(Stdout, |t| t.style(Style::new().cyan().bold())),
-            format!("{} · no new conversation", b.origin).if_supports_color(Stdout, |t| t.dimmed()),
+            eid.if_supports_color(Stdout, |t| t.style(Style::new().cyan().bold())),
+            format!("{origin} · no new conversation").if_supports_color(Stdout, |t| t.dimmed()),
         ));
     }
-    if end < total {
+    if lay.earlier > 0 {
         out.push_str(&format!(
             "{}\n",
-            format!("┆ … {} earlier (use --full)", total - end).if_supports_color(Stdout, |t| t.dimmed())
+            format!("┆ … {} earlier (use --full)", lay.earlier).if_supports_color(Stdout, |t| t.dimmed())
         ));
     }
     out

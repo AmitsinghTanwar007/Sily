@@ -15,8 +15,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use sily_core::model::{BranchRecord, Commit, Role};
-use sily_core::provider::{MsgPoint, Provider};
+use sily_core::provider::Provider;
 use sily_core::store::{ProjectSessions, SessionRef};
+
+use crate::graph;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -367,36 +369,10 @@ impl<'a> App<'a> {
         let provider = self.providers.iter().map(|b| b.as_ref()).find(|p| p.owns(id));
         let lines = match provider.and_then(|p| p.messages(id).ok()) {
             Some(main_msgs) => {
-                // Map every message point → the meaningful message it displays under,
-                // so forks anchored at a noise message (e.g. "/exit") still show.
-                let first_meaningful =
-                    main_msgs.iter().find(|m| meaningful(&m.text)).map(|m| m.point.clone());
-                let mut anchor: HashMap<String, String> = HashMap::new();
-                let mut last: Option<String> = None;
-                for m in &main_msgs {
-                    if meaningful(&m.text) {
-                        last = Some(m.point.clone());
-                    }
-                    let a = last
-                        .clone()
-                        .or_else(|| first_meaningful.clone())
-                        .unwrap_or_else(|| m.point.clone());
-                    anchor.insert(m.point.clone(), a);
-                }
-                let last_raw = main_msgs.last().map(|m| m.point.clone()).unwrap_or_default();
-                let anchored = |raw: &str| anchor.get(raw).cloned().unwrap_or_else(|| raw.to_string());
-
-                let mut commit_at: BTreeMap<String, Vec<String>> = BTreeMap::new();
-                for c in self.commits.iter().filter(|c| c.session_id == id) {
-                    let raw = if c.message_uuid.is_empty() { &last_raw } else { &c.message_uuid };
-                    let label = match c.note.as_deref() {
-                        Some(n) if !n.is_empty() => format!("{}  \"{}\"", c.name, n),
-                        _ => c.name.clone(),
-                    };
-                    commit_at.entry(anchored(raw)).or_default().push(label);
-                }
-
-                let mut branch_at: BTreeMap<String, Vec<BranchLane>> = BTreeMap::new();
+                // Same multi-lane layout as `sily graph`, rendered to ratatui lines.
+                let commits: Vec<Commit> =
+                    self.commits.iter().filter(|c| c.session_id == id).cloned().collect();
+                let mut gbs: Vec<graph::GraphBranch> = Vec::new();
                 for b in self.branches.iter().filter(|b| b.from_session == id) {
                     let bm = self
                         .providers
@@ -410,20 +386,18 @@ impl<'a> App<'a> {
                         .zip(bm.iter())
                         .take_while(|(a, c)| a.role == c.role && a.text == c.text)
                         .count();
-                    // the branch's new *conversation* (noise filtered out)
-                    let tail: Vec<MsgPoint> =
-                        bm.into_iter().skip(common).filter(|m| meaningful(&m.text)).collect();
-                    let raw = if b.at_message.is_empty() { &last_raw } else { &b.at_message };
-                    branch_at.entry(anchored(raw)).or_default().push(BranchLane {
+                    let fork_point =
+                        if common > 0 { main_msgs[common - 1].point.clone() } else { String::new() };
+                    let tail = bm.into_iter().skip(common).collect();
+                    gbs.push(graph::GraphBranch {
                         id: short(&b.session_id).to_string(),
                         origin: b.origin.clone(),
+                        fork_point,
                         tail,
                     });
                 }
-
-                let real: Vec<MsgPoint> =
-                    main_msgs.iter().filter(|m| meaningful(&m.text)).cloned().collect();
-                rail_lines(id, &real, &commit_at, &branch_at)
+                let lay = graph::session_layout(id, &main_msgs, &commits, &gbs, Some(60));
+                layout_lines(&lay)
             }
             None => vec![Line::from("(no messages)")],
         };
@@ -431,22 +405,62 @@ impl<'a> App<'a> {
     }
 }
 
-/// A real, human turn — not command/tool/system plumbing or empty filler.
-fn meaningful(text: &str) -> bool {
-    let t = text.trim();
-    !t.is_empty()
-        && !t.starts_with('<')
-        && !t.starts_with("[Request interrupted")
-        && t != "No response requested."
-        && t != "No response requested"
-}
+/// Render a shared [`graph::GraphLayout`] to ratatui lines for the detail pane.
+fn layout_lines(lay: &graph::GraphLayout) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let green = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
+    let cyan = Style::default().fg(Color::Cyan);
+    let cyanb = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let mainnode = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let userc = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let aic = Style::default().fg(Color::White);
 
-/// A branch shown in a parallel lane: its id, how it was made, and its work
-/// after the fork point.
-struct BranchLane {
-    id: String,
-    origin: String,
-    tail: Vec<MsgPoint>,
+    let mut out = vec![Line::from(vec![
+        Span::styled("▌ ", Style::default().fg(Color::Magenta)),
+        Span::styled(lay.id.clone(), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+        Span::styled("  · newest first", dim),
+    ])];
+    out.push(Line::from(""));
+    if let Some(note) = &lay.empty_note {
+        out.push(Line::styled(note.clone(), dim));
+        return out;
+    }
+    for row in &lay.rows {
+        let mut spans: Vec<Span> = Vec::new();
+        for cell in &row.cells {
+            match cell {
+                graph::RailCell::MainNode => spans.push(Span::styled("●", mainnode)),
+                graph::RailCell::BranchNode => spans.push(Span::styled("●", cyan)),
+                graph::RailCell::Dim(c) => spans.push(Span::styled(c.to_string(), dim)),
+            }
+        }
+        spans.push(Span::raw(" "));
+        let rolestyle = if row.is_main {
+            match row.role {
+                Role::User => userc,
+                Role::Assistant => aic,
+                _ => dim,
+            }
+        } else {
+            cyan
+        };
+        spans.push(Span::styled(format!("{}  ", who(row.role)), rolestyle));
+        spans.push(Span::raw(truncate(&row.text, 44)));
+        for c in &row.commits {
+            spans.push(Span::styled(format!("  ◆ {c}"), green));
+        }
+        for eid in &row.stubs {
+            spans.push(Span::styled(format!("  ╰○ {eid}"), cyanb));
+        }
+        out.push(Line::from(spans));
+    }
+    for (eid, origin) in &lay.bottom_empties {
+        out.push(Line::styled(format!("○ {eid}  {origin} · no new conversation"), dim));
+    }
+    if lay.earlier > 0 {
+        out.push(Line::styled(format!("┆ … {} earlier", lay.earlier), dim));
+    }
+    out
 }
 
 /// Human-friendly speaker label for the detail pane.
@@ -459,86 +473,6 @@ fn who(r: Role) -> &'static str {
     }
 }
 
-/// Build the detail-pane lines: the session's real conversation **newest-first**
-/// (noise already filtered), with each branch's new conversation in a parallel
-/// lane at its fork point. `commit_at`/`branch_at` are pre-anchored to real msgs.
-fn rail_lines(
-    id: &str,
-    main: &[MsgPoint],
-    commit_at: &BTreeMap<String, Vec<String>>,
-    branch_at: &BTreeMap<String, Vec<BranchLane>>,
-) -> Vec<Line<'static>> {
-    let dim = Style::default().fg(Color::DarkGray);
-    let green = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
-    let cyan = Style::default().fg(Color::Cyan);
-    let cyanb = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-    let userc = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-    let aic = Style::default().fg(Color::White);
-
-    let mut out = vec![Line::from(vec![
-        Span::styled("▌ ", Style::default().fg(Color::Magenta)),
-        Span::styled(short(id).to_string(), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-        Span::styled(format!("  · {} messages · newest first", main.len()), dim),
-    ])];
-    if main.is_empty() {
-        out.push(Line::from(""));
-        out.push(Line::styled("(no conversation — only system/command messages)", dim));
-        return out;
-    }
-    out.push(Line::from(""));
-
-    let start = main.len().saturating_sub(30);
-    let win = &main[start..];
-    for (k, m) in win.iter().rev().enumerate() {
-        let speaker = who(m.role);
-        let speaker_style = match m.role {
-            Role::User => userc,
-            Role::Assistant => aic,
-            _ => dim,
-        };
-        out.push(Line::from(vec![
-            Span::styled(format!("{speaker}  "), speaker_style),
-            Span::raw(truncate(&m.text, 44)),
-        ]));
-        for c in commit_at.get(&m.point).into_iter().flatten() {
-            out.push(Line::from(vec![
-                Span::styled("   ◆ ", green),
-                Span::styled(c.clone(), green),
-            ]));
-        }
-        for lane in branch_at.get(&m.point).into_iter().flatten() {
-            out.push(Line::from(vec![
-                Span::styled("   ╰─○ ", cyan),
-                Span::styled(lane.id.clone(), cyanb),
-                Span::styled(format!("  {} · {} new", lane.origin, lane.tail.len()), dim),
-            ]));
-            if lane.tail.is_empty() {
-                out.push(Line::from(vec![Span::styled("        (no new conversation)", dim)]));
-            } else {
-                for t in lane.tail.iter().take(3) {
-                    out.push(Line::from(vec![
-                        Span::styled("        ", dim),
-                        Span::styled(format!("{}: ", who(t.role)), dim),
-                        Span::raw(truncate(&t.text, 30)),
-                    ]));
-                }
-                if lane.tail.len() > 3 {
-                    out.push(Line::from(vec![Span::styled(
-                        format!("        … {} more", lane.tail.len() - 3),
-                        dim,
-                    )]));
-                }
-            }
-        }
-        if k != win.len() - 1 {
-            out.push(Line::styled("│", dim));
-        }
-    }
-    if start > 0 {
-        out.push(Line::styled(format!("┆ … {start} earlier", ), dim));
-    }
-    out
-}
 
 pub fn run<F>(
     relist: F,
