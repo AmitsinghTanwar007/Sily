@@ -251,9 +251,9 @@ pub fn session_layout(
 
     // tip row index → branch id, so each lane gets labelled at its newest node
     let mut tip_branch: HashMap<usize, String> = HashMap::new();
-    for l in 1..=maxlane {
-        if head[l] != usize::MAX {
-            tip_branch.insert(head[l], lane_ids.get(l).cloned().unwrap_or_default());
+    for (l, &h) in head.iter().enumerate().skip(1) {
+        if h != usize::MAX {
+            tip_branch.insert(h, lane_ids.get(l).cloned().unwrap_or_default());
         }
     }
 
