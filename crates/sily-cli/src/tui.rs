@@ -446,6 +446,9 @@ fn layout_lines(lay: &graph::GraphLayout) -> Vec<Line<'static>> {
         };
         spans.push(Span::styled(format!("{}  ", who(row.role)), rolestyle));
         spans.push(Span::raw(truncate(&row.text, 44)));
+        if let Some(bid) = &row.branch_tip {
+            spans.push(Span::styled(format!("  ← branch {bid}"), cyanb));
+        }
         for c in &row.commits {
             spans.push(Span::styled(format!("  ◆ {c}"), green));
         }

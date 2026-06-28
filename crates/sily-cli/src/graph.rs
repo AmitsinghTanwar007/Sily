@@ -124,6 +124,8 @@ pub struct RowOut {
     pub text: String,
     pub commits: Vec<String>,
     pub stubs: Vec<String>, // just-created branches forking at this node
+    /// Set on a branch lane's tip node: the branch id (so you know which lane is which).
+    pub branch_tip: Option<String>,
 }
 
 /// A fully laid-out graph, ready to render to ANSI (`sily graph`) or ratatui
@@ -186,6 +188,7 @@ pub fn session_layout(
         .collect();
     let mut empty_branches: Vec<&GraphBranch> = Vec::new();
     let mut fork_pts: Vec<String> = vec![String::new()]; // lane-indexed fork point
+    let mut lane_ids: Vec<String> = vec![String::new()]; // lane-indexed branch id
     for b in branches {
         let tail: Vec<&MsgPoint> = b.tail.iter().filter(|m| meaningful(&m.text)).collect();
         if tail.is_empty() {
@@ -194,6 +197,7 @@ pub fn session_layout(
         }
         let lane = fork_pts.len();
         fork_pts.push(anch(&b.fork_point));
+        lane_ids.push(b.id.clone());
         for m in &tail {
             rows.push(GRow { time: m.time.clone(), lane, role: m.role, text: m.text.clone(), point: String::new(), is_main: false });
         }
@@ -244,6 +248,14 @@ pub fn session_layout(
     }
     let shown_points: std::collections::HashSet<&str> =
         shown.iter().filter(|r| r.is_main).map(|r| r.point.as_str()).collect();
+
+    // tip row index → branch id, so each lane gets labelled at its newest node
+    let mut tip_branch: HashMap<usize, String> = HashMap::new();
+    for l in 1..=maxlane {
+        if head[l] != usize::MAX {
+            tip_branch.insert(head[l], lane_ids.get(l).cloned().unwrap_or_default());
+        }
+    }
 
     let mut out_rows: Vec<RowOut> = Vec::new();
     for (r, row) in shown.iter().enumerate() {
@@ -307,6 +319,7 @@ pub fn session_layout(
             text: row.text.clone(),
             commits: commits_here,
             stubs: stubs_here,
+            branch_tip: tip_branch.get(&r).cloned(),
         });
     }
 
@@ -353,6 +366,12 @@ pub fn session_graph(
             role_lbl(row.role).if_supports_color(Stdout, |t| t.cyan()).to_string()
         };
         let mut lbl = format!("{role}  {}", truncate(&row.text, if row.is_main { 48 } else { 40 }));
+        if let Some(bid) = &row.branch_tip {
+            lbl.push_str(&format!(
+                "  {}",
+                format!("← branch {bid}").if_supports_color(Stdout, |t| t.style(Style::new().cyan().bold())),
+            ));
+        }
         for c in &row.commits {
             lbl.push_str(&format!(
                 "  {} {}",
