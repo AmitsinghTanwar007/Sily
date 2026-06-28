@@ -201,6 +201,15 @@ pub fn session_graph(
     let main_idxs: Vec<usize> = all_main.iter().copied().filter(|&i| i < end).collect();
     let (m_first, m_last) = (main_idxs.first().copied().unwrap_or(0), main_idxs.last().copied().unwrap_or(0));
 
+    // Branches with no new conversation: show a stub `╰○` on their fork message
+    // so you can see the branch exists, even without messages of its own.
+    let mut empty_at: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for b in &empty_branches {
+        empty_at.entry(anch(&b.fork_point)).or_default().push(b.id.clone());
+    }
+    let shown_points: std::collections::HashSet<&str> =
+        shown.iter().filter(|r| r.is_main).map(|r| r.point.as_str()).collect();
+
     let dim = |s: &str| s.if_supports_color(Stdout, |t| t.dimmed()).to_string();
     let mut out = format!(
         "{} {}\n",
@@ -263,6 +272,13 @@ pub fn session_graph(
                     c.name.if_supports_color(Stdout, |t| t.style(Style::new().green().bold())),
                 ));
             }
+            for eid in empty_at.get(row.point.as_str()).into_iter().flatten() {
+                lbl.push_str(&format!(
+                    "  {}{}",
+                    "╰○ ".if_supports_color(Stdout, |t| t.cyan()),
+                    eid.if_supports_color(Stdout, |t| t.style(Style::new().cyan().bold())),
+                ));
+            }
             lbl
         } else {
             format!(
@@ -274,7 +290,11 @@ pub fn session_graph(
         out.push_str(&format!("{rail} {label}\n"));
     }
 
+    // Any empty branch whose fork point isn't on screen falls back to a bottom note.
     for b in &empty_branches {
+        if shown_points.contains(anch(&b.fork_point).as_str()) {
+            continue;
+        }
         out.push_str(&format!(
             "{} {}  {}\n",
             "○".if_supports_color(Stdout, |t| t.cyan()),
