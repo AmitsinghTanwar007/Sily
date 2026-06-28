@@ -163,22 +163,16 @@ pub fn session_graph(
             rows.push(GRow { time: m.time.clone(), lane, role: m.role, text: m.text.clone(), point: String::new(), is_main: false });
         }
     }
-    rows.sort_by(|a, b| b.time.cmp(&a.time)); // newest first
+    rows.sort_by(|a, b| b.time.cmp(&a.time)); // newest first (rows[0] = newest)
     let total = rows.len();
-    let start = match limit {
-        Some(n) if total > n => total - n,
-        _ => 0,
-    };
-    let shown: Vec<GRow> = rows[start..].to_vec();
-    let n = shown.len();
-    let maxlane = shown.iter().map(|r| r.lane).max().unwrap_or(0);
+    let maxlane = rows.iter().map(|r| r.lane).max().unwrap_or(0);
+    let all_main: Vec<usize> = (0..total).filter(|&i| rows[i].lane == 0).collect();
 
-    let main_idxs: Vec<usize> = (0..n).filter(|&i| shown[i].lane == 0).collect();
-    let (m_first, m_last) = (main_idxs.first().copied().unwrap_or(0), main_idxs.last().copied().unwrap_or(0));
     let mut head = vec![usize::MAX; maxlane + 1];
     let mut fork = vec![usize::MAX; maxlane + 1];
+    let mut deepest = 0usize;
     for l in 1..=maxlane {
-        let idxs: Vec<usize> = (0..n).filter(|&i| shown[i].lane == l).collect();
+        let idxs: Vec<usize> = (0..total).filter(|&i| rows[i].lane == l).collect();
         if idxs.is_empty() {
             continue;
         }
@@ -186,16 +180,26 @@ pub fn session_graph(
         // fork = the main row at this branch's fork point (last shared message);
         // fall back to the newest main not newer than the branch's oldest msg.
         let fp = fork_pts.get(l).cloned().unwrap_or_default();
-        fork[l] = main_idxs
+        fork[l] = all_main
             .iter()
             .copied()
-            .find(|&mi| shown[mi].point == fp)
+            .find(|&mi| rows[mi].point == fp)
             .or_else(|| {
-                let oldest = shown[*idxs.iter().max().unwrap()].time.clone();
-                main_idxs.iter().copied().find(|&mi| shown[mi].time <= oldest)
+                let oldest = rows[*idxs.iter().max().unwrap()].time.clone();
+                all_main.iter().copied().find(|&mi| rows[mi].time <= oldest)
             })
-            .unwrap_or(m_last);
+            .unwrap_or_else(|| all_main.last().copied().unwrap_or(0));
+        deepest = deepest.max(fork[l]);
     }
+    // Show the newest `limit` rows, but always extend down to the deepest fork so
+    // branches (and the point they split from) stay visible.
+    let end = match limit {
+        Some(n) => n.max(deepest + 1).min(total),
+        None => total,
+    };
+    let shown = &rows[0..end];
+    let main_idxs: Vec<usize> = all_main.iter().copied().filter(|&i| i < end).collect();
+    let (m_first, m_last) = (main_idxs.first().copied().unwrap_or(0), main_idxs.last().copied().unwrap_or(0));
 
     let dim = |s: &str| s.if_supports_color(Stdout, |t| t.dimmed()).to_string();
     let mut out = format!(
@@ -278,10 +282,10 @@ pub fn session_graph(
             format!("{} · no new conversation", b.origin).if_supports_color(Stdout, |t| t.dimmed()),
         ));
     }
-    if start > 0 {
+    if end < total {
         out.push_str(&format!(
             "{}\n",
-            format!("┆ … {start} earlier (use --full)").if_supports_color(Stdout, |t| t.dimmed())
+            format!("┆ … {} earlier (use --full)", total - end).if_supports_color(Stdout, |t| t.dimmed())
         ));
     }
     out
