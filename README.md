@@ -123,6 +123,9 @@ selected session's graph on the right.
 - `revert` is safe by default: it creates a new session and leaves everything else
   intact. Use `--hard` only to truly discard the later messages.
 - Most commands take an optional `--at <message-id>` to act on an exact point.
+- Resume commands (copied with `y`, or printed by `branch` / `revert` / `merge`)
+  include a `cd` into the session's directory when it differs from your current one,
+  so you land in the right place.
 
 ## How it works
 

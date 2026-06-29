@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
@@ -49,6 +50,27 @@ fn resume_command(provider: &str, id: &str) -> String {
         "codex-cli" => format!("codex resume {id}"),
         "opencode" => format!("opencode --session {id}"),
         _ => format!("claude --resume {id}"),
+    }
+}
+
+/// Prefix a resume command with `cd <dir> &&` when the session lives somewhere
+/// other than the current directory, so copying it teleports you there. Skips
+/// non-path cwds (e.g. gemini's hash labels) and when already in that directory.
+fn with_cd(resume: String, cwd: Option<&str>, cur: Option<&Path>) -> String {
+    match cwd {
+        Some(c) if c.starts_with('/') && cur.map(|p| p != Path::new(c)).unwrap_or(true) => {
+            format!("cd {} && {}", shell_quote(c), resume)
+        }
+        _ => resume,
+    }
+}
+
+/// Quote a path for `cd` if it contains anything the shell would choke on.
+fn shell_quote(s: &str) -> String {
+    if s.is_empty() || s.chars().any(|c| matches!(c, '\'' | ' ' | '"' | '$' | '`' | '\\' | '(' | ')')) {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    } else {
+        s.to_string()
     }
 }
 
@@ -97,6 +119,7 @@ fn build_tree(
     branches: &[BranchRecord],
 ) -> Tree {
     let mut tree = Tree { nodes: Vec::new(), roots: Vec::new() };
+    let cwd_now = std::env::current_dir().ok();
     for (name, projects) in providers {
         // (count, modified) per session id, for showing branch sizes.
         let info: HashMap<String, (usize, Option<SystemTime>)> = projects
@@ -134,7 +157,7 @@ fn build_tree(
 
         let mut top: Vec<usize> = Vec::new();
         for (seg, child) in &root.children {
-            top.push(convert_dir(&mut tree, format!("/{seg}"), child, commits, branches, name, &is_child, &info));
+            top.push(convert_dir(&mut tree, format!("/{seg}"), child, commits, branches, name, &is_child, &info, cwd_now.as_deref()));
         }
         tree.nodes[adapter].children = top;
     }
@@ -153,6 +176,7 @@ fn convert_dir(
     provider: &str,
     is_child: &HashSet<String>,
     info: &HashMap<String, (usize, Option<SystemTime>)>,
+    cwd_now: Option<&Path>,
 ) -> usize {
     let mut cur = trie;
     while cur.sessions.is_empty() && cur.children.len() == 1 {
@@ -171,10 +195,10 @@ fn convert_dir(
         if is_child.contains(&s.id) {
             continue;
         }
-        children.push(convert_session(tree, s, commits, branches, provider, info));
+        children.push(convert_session(tree, s, commits, branches, provider, info, cwd_now));
     }
     for (k, child) in &cur.children {
-        children.push(convert_dir(tree, format!("{label}/{k}"), child, commits, branches, provider, is_child, info));
+        children.push(convert_dir(tree, format!("{label}/{k}"), child, commits, branches, provider, is_child, info, cwd_now));
     }
 
     tree.push(Node {
@@ -199,7 +223,9 @@ fn convert_session(
     branches: &[BranchRecord],
     provider: &str,
     info: &HashMap<String, (usize, Option<SystemTime>)>,
+    cwd_now: Option<&Path>,
 ) -> usize {
+    let cwd = s.meta.cwd.as_deref();
     let mut children = Vec::new();
     for c in commits.iter().filter(|c| c.session_id == s.id) {
         let note = c.note.clone().unwrap_or_default();
@@ -222,7 +248,7 @@ fn convert_session(
             primary: short(&b.session_id).to_string(),
             secondary: format!("{} (from {})", b.origin, from),
             meta: meta_line(cnt, modified),
-            resume: Some(resume_command("claude-code", &b.session_id)),
+            resume: Some(with_cd(resume_command("claude-code", &b.session_id), cwd, cwd_now)),
             session_id: Some(b.session_id.clone()),
             children: Vec::new(),
         }));
@@ -232,7 +258,7 @@ fn convert_session(
         primary: short(&s.id).to_string(),
         secondary: truncate(&s.summary, 60),
         meta: meta_line(s.message_count, s.modified),
-        resume: Some(resume_command(provider, &s.id)),
+        resume: Some(with_cd(resume_command(provider, &s.id), cwd, cwd_now)),
         session_id: Some(s.id.clone()),
         children,
     })

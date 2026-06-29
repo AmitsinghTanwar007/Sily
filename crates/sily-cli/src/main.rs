@@ -193,6 +193,16 @@ impl Ctx {
         self.providers.iter().map(|b| b.as_ref()).find(|p| p.name() == name)
     }
 
+    /// The directory a session lives in (its project cwd), if known.
+    fn cwd_of(&self, id: &str) -> Option<String> {
+        let p = self.provider_for(id).ok()?;
+        p.list_projects()
+            .ok()?
+            .into_iter()
+            .find(|proj| proj.sessions.iter().any(|s| s.id == id))
+            .map(|proj| proj.cwd)
+    }
+
     /// Session listings from every provider (skips empty/uninstalled).
     fn listings(&self) -> Vec<(String, Vec<sily_core::store::ProjectSessions>)> {
         let mut out = Vec::new();
@@ -239,6 +249,30 @@ fn build_ctx(cwd_override: Option<String>) -> Result<Ctx, CliError> {
 
 fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+/// Prefix a resume command with `cd <dir> &&` when the session isn't in the
+/// current directory, so it teleports you there. Skips non-path cwds.
+fn resume_line(resume: &str, cwd: Option<&str>) -> String {
+    let here = std::env::current_dir().ok();
+    match cwd {
+        Some(c)
+            if c.starts_with('/')
+                && here.as_deref().map(|p| p != std::path::Path::new(c)).unwrap_or(true) =>
+        {
+            format!("cd {} && {}", shell_quote(c), resume)
+        }
+        _ => resume.to_string(),
+    }
+}
+
+/// Single-quote a path for `cd` if it has shell-significant characters.
+fn shell_quote(s: &str) -> String {
+    if s.is_empty() || s.chars().any(|c| matches!(c, '\'' | ' ' | '"' | '$' | '`' | '\\' | '(' | ')')) {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    } else {
+        s.to_string()
+    }
 }
 
 fn run(cli: Cli) -> Result<(), CliError> {
@@ -400,6 +434,7 @@ fn cmd_commits(ctx: &Ctx) -> Result<(), CliError> {
 }
 
 fn cmd_branch(ctx: &Ctx, session: String, at: Option<String>) -> Result<(), CliError> {
+    let cwd = ctx.cwd_of(&session);
     let new = ctx.provider_for(&session)?.branch(&session, at.as_deref())?;
     ctx.branches.add(BranchRecord {
         session_id: new.id.clone(),
@@ -409,7 +444,7 @@ fn cmd_branch(ctx: &Ctx, session: String, at: Option<String>) -> Result<(), CliE
         created_at: now_iso(),
     })?;
     println!("created session {} ({} messages)", new.id, new.messages);
-    println!("  resume with:  {}", new.resume);
+    println!("  resume with:  {}", resume_line(&new.resume, cwd.as_deref()));
     Ok(())
 }
 
@@ -431,7 +466,7 @@ fn cmd_revert(ctx: &Ctx, commit: String, hard: bool) -> Result<(), CliError> {
             created_at: now_iso(),
         })?;
         println!("reverted commit '{}' into session {} ({} messages)", c.name, new.id, new.messages);
-        println!("  resume with:  {}", new.resume);
+        println!("  resume with:  {}", resume_line(&new.resume, ctx.cwd_of(&c.session_id).as_deref()));
     }
     Ok(())
 }
@@ -485,7 +520,7 @@ fn cmd_merge(ctx: &Ctx, branch: String, into: Option<String>) -> Result<(), CliE
         new.id,
         new.messages
     );
-    println!("  resume with:  {}", new.resume);
+    println!("  resume with:  {}", resume_line(&new.resume, ctx.cwd_of(&main).as_deref()));
     Ok(())
 }
 
