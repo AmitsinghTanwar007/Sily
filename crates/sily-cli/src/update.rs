@@ -22,13 +22,36 @@ fn asset_name() -> Result<String, String> {
     Ok(format!("sily-{os}-{arch}.tar.gz"))
 }
 
-/// Best-effort: the latest release tag via the GitHub API (e.g. "v0.3.0").
-fn latest_version() -> Option<String> {
+/// Best-effort: the latest release tag via GitHub's redirect from
+/// `/releases/latest` to `/releases/tag/vX.Y.Z`. This avoids the REST API's
+/// unauthenticated rate limit.
+fn latest_version_via_redirect() -> Option<String> {
+    let out = Command::new("curl")
+        .args([
+            "-fsSIL",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{url_effective}",
+            &format!("https://github.com/{REPO}/releases/latest"),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_tag_from_release_url(std::str::from_utf8(&out.stdout).ok()?.trim())
+}
+
+/// Fallback: the latest release tag via the GitHub API (e.g. "v0.3.0").
+fn latest_version_via_api() -> Option<String> {
     let out = Command::new("curl")
         .args([
             "-fsSL",
             "-H",
             "Accept: application/vnd.github+json",
+            "-H",
+            &format!("User-Agent: sily/{}", env!("CARGO_PKG_VERSION")),
             &format!("https://api.github.com/repos/{REPO}/releases/latest"),
         ])
         .output()
@@ -38,6 +61,24 @@ fn latest_version() -> Option<String> {
     }
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
     v.get("tag_name")?.as_str().map(str::to_string)
+}
+
+fn latest_version() -> Option<String> {
+    latest_version_via_redirect().or_else(latest_version_via_api)
+}
+
+fn parse_tag_from_release_url(url: &str) -> Option<String> {
+    url.rsplit("/tag/").next().and_then(|s| {
+        let tag = s.trim();
+        (!tag.is_empty() && tag.starts_with('v')).then(|| tag.to_string())
+    })
+}
+
+fn download_url(asset: &str, latest: Option<&str>) -> String {
+    match latest {
+        Some(tag) => format!("https://github.com/{REPO}/releases/download/{tag}/{asset}"),
+        None => format!("https://github.com/{REPO}/releases/latest/download/{asset}"),
+    }
 }
 
 fn perm_hint(e: std::io::Error, dir: &Path) -> String {
@@ -54,7 +95,8 @@ pub fn run() -> Result<(), String> {
     let current = env!("CARGO_PKG_VERSION");
     println!("sily: installed version v{current}");
 
-    match latest_version() {
+    let latest = latest_version();
+    match latest.as_deref() {
         Some(latest) => {
             println!("sily: latest release {latest}");
             if latest.trim_start_matches('v') == current {
@@ -72,7 +114,7 @@ pub fn run() -> Result<(), String> {
     let tmp = std::env::temp_dir().join(format!("sily-update-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let tarball = tmp.join(&asset);
-    let url = format!("https://github.com/{REPO}/releases/latest/download/{asset}");
+    let url = download_url(&asset, latest.as_deref());
 
     println!("sily: downloading {asset}…");
     let dl = Command::new("curl")
@@ -110,4 +152,35 @@ pub fn run() -> Result<(), String> {
 
     println!("sily: updated successfully → {}", exe.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{download_url, parse_tag_from_release_url};
+
+    #[test]
+    fn parses_tag_from_release_redirect() {
+        let tag = parse_tag_from_release_url(
+            "https://github.com/AmitsinghTanwar007/Sily/releases/tag/v0.22.1",
+        );
+        assert_eq!(tag.as_deref(), Some("v0.22.1"));
+    }
+
+    #[test]
+    fn tag_specific_download_url_is_stable() {
+        let url = download_url("sily-macos-arm64.tar.gz", Some("v0.22.1"));
+        assert_eq!(
+            url,
+            "https://github.com/AmitsinghTanwar007/Sily/releases/download/v0.22.1/sily-macos-arm64.tar.gz"
+        );
+    }
+
+    #[test]
+    fn latest_redirect_download_url_is_fallback_only() {
+        let url = download_url("sily-linux-x86_64.tar.gz", None);
+        assert_eq!(
+            url,
+            "https://github.com/AmitsinghTanwar007/Sily/releases/latest/download/sily-linux-x86_64.tar.gz"
+        );
+    }
 }
