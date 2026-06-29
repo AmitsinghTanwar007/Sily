@@ -7,7 +7,7 @@ use sily_core::model::Role;
 use sily_core::provider::{MsgPoint, NewSession, Provider};
 use sily_core::store::ProjectSessions;
 
-use crate::{branch, create_session, list_all_projects, merge, message_points, Branched};
+use crate::{branch, create_session, list_all_projects, merge, message_points_db, Branched};
 
 pub struct OpenCodeProvider {
     db_path: PathBuf,
@@ -42,7 +42,7 @@ impl Provider for OpenCodeProvider {
     }
 
     fn messages(&self, id: &str) -> Result<Vec<MsgPoint>> {
-        Ok(message_points(id)?
+        Ok(message_points_db(&self.db_path, id)?
             .into_iter()
             .map(|(mid, role, text, time)| MsgPoint {
                 point: mid,

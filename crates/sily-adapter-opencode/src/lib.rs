@@ -24,14 +24,20 @@ fn io_err(e: impl std::fmt::Display) -> Error {
     Error::Io(std::io::Error::other(e.to_string()))
 }
 
+fn open_db_readonly(db_path: &Path) -> Result<Connection> {
+    if !db_path.exists() {
+        return Err(Error::SessionNotFound(db_path.display().to_string()));
+    }
+    Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(io_err)
+}
+
 /// Enumerate every OpenCode session in the database, grouped by directory (cwd).
 pub fn list_all_projects(db_path: &Path) -> Result<Vec<ProjectSessions>> {
     if !db_path.exists() {
         return Ok(Vec::new());
     }
     // Read-only; don't create or modify the DB.
-    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(io_err)?;
+    let conn = open_db_readonly(db_path)?;
 
     // message counts per session in one pass
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -109,6 +115,89 @@ pub struct Branched {
     pub new_id: Option<String>,
     pub resume: Option<String>,
     pub kept_messages: usize,
+}
+
+/// Read message points directly from OpenCode's SQLite DB. This is more robust
+/// than `opencode export` for browse commands because some sessions emit
+/// malformed export JSON even though the DB rows are intact.
+pub fn message_points_db(db_path: &Path, session_id: &str) -> Result<Vec<(String, String, String, String)>> {
+    let conn = open_db_readonly(db_path)?;
+    let mut messages: Vec<(String, String, String)> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, time_created, data
+                 FROM message
+                 WHERE session_id = ?
+                 ORDER BY time_created, id",
+            )
+            .map_err(io_err)?;
+        let rows = stmt
+            .query_map([session_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(io_err)?;
+        for row in rows {
+            let (id, created, data) = row.map_err(io_err)?;
+            let role = serde_json::from_str::<Value>(&data)
+                .ok()
+                .and_then(|v| v.get("role").and_then(Value::as_str).map(str::to_string))
+                .unwrap_or_default();
+            messages.push((id, role, format!("{created:020}")));
+        }
+    }
+
+    let mut text_by_message: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT message_id, data
+                 FROM part
+                 WHERE session_id = ?
+                 ORDER BY time_created, id",
+            )
+            .map_err(io_err)?;
+        let rows = stmt
+            .query_map([session_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                ))
+            })
+            .map_err(io_err)?;
+        for row in rows {
+            let (message_id, data) = row.map_err(io_err)?;
+            let Some(text) = serde_json::from_str::<Value>(&data)
+                .ok()
+                .and_then(|v| {
+                    v.get("text")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|t| !t.is_empty())
+                        .map(str::to_string)
+                })
+            else {
+                continue;
+            };
+            let entry = text_by_message.entry(message_id).or_default();
+            if !entry.is_empty() {
+                entry.push(' ');
+            }
+            entry.push_str(&text);
+        }
+    }
+
+    Ok(messages
+        .into_iter()
+        .map(|(id, role, time)| {
+            let text = text_by_message.remove(&id).unwrap_or_default();
+            (id, role, text, time)
+        })
+        .collect())
 }
 
 /// (message id, role, snippet) for each message, so a caller can choose a branch
@@ -327,7 +416,8 @@ fn find_new_session_id(text: &str, source: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_export_json;
+    use super::{message_points_db, parse_export_json};
+    use rusqlite::Connection;
 
     #[test]
     fn parse_export_json_accepts_status_prefix() {
@@ -345,5 +435,70 @@ mod tests {
     fn parse_export_json_requires_object_payload() {
         let err = parse_export_json(b"Exporting session only\n").unwrap_err();
         assert!(err.to_string().contains("did not contain JSON output"));
+    }
+
+    #[test]
+    fn message_points_db_reads_role_and_text_parts() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE message (
+              id text PRIMARY KEY,
+              session_id text NOT NULL,
+              time_created integer NOT NULL,
+              time_updated integer NOT NULL,
+              data text NOT NULL
+            );
+            CREATE TABLE part (
+              id text PRIMARY KEY,
+              message_id text NOT NULL,
+              session_id text NOT NULL,
+              time_created integer NOT NULL,
+              time_updated integer NOT NULL,
+              data text NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "m1",
+                "ses_1",
+                10_i64,
+                10_i64,
+                r#"{"role":"user"}"#,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "p1",
+                "m1",
+                "ses_1",
+                11_i64,
+                11_i64,
+                r#"{"type":"text","text":"hello"}"#,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "p2",
+                "m1",
+                "ses_1",
+                12_i64,
+                12_i64,
+                r#"{"type":"reasoning","text":"world"}"#,
+            ],
+        )
+        .unwrap();
+
+        let points = message_points_db(&db_path, "ses_1").unwrap();
+        assert_eq!(points, vec![("m1".into(), "user".into(), "hello world".into(), "00000000000000000010".into())]);
     }
 }

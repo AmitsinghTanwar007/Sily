@@ -10,3 +10,6 @@ description = "OpenCode adapter for sily: reads sessions from its SQLite databas
 sily-core = { path = "../sily-core" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
