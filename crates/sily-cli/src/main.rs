@@ -9,6 +9,7 @@ mod branchstore;
 mod brand;
 mod commitstore;
 mod graph;
+mod idfmt;
 mod render;
 mod tui;
 mod update;

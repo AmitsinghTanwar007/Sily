@@ -14,6 +14,8 @@ use sily_core::model::{BranchRecord, Commit, Role};
 use sily_core::provider::MsgPoint;
 use sily_core::store::{ProjectSessions, SessionRef};
 
+use crate::idfmt::{compact_label, unique_labels};
+
 /// Render the full tree across all providers and projects (`sily list`).
 pub fn render_all(
     providers: &[(String, Vec<ProjectSessions>)],
@@ -411,6 +413,7 @@ fn latest(sessions: &[SessionRef]) -> Option<SystemTime> {
 
 struct Ctx<'a> {
     by_id: HashMap<&'a str, &'a SessionRef>,
+    label_by_id: HashMap<String, String>,
     commits_of: HashMap<&'a str, Vec<&'a Commit>>,
     children_of: HashMap<&'a str, Vec<&'a BranchRecord>>,
     is_child: HashMap<&'a str, bool>,
@@ -421,6 +424,7 @@ impl<'a> Ctx<'a> {
     fn build(sessions: &'a [SessionRef], commits: &'a [Commit], branches: &'a [BranchRecord]) -> Self {
         let by_id: HashMap<&str, &SessionRef> =
             sessions.iter().map(|s| (s.id.as_str(), s)).collect();
+        let label_by_id = unique_labels(sessions.iter().map(|s| s.id.as_str()), 8);
 
         let mut commits_of: HashMap<&str, Vec<&Commit>> = HashMap::new();
         for c in commits {
@@ -440,7 +444,7 @@ impl<'a> Ctx<'a> {
             }
         }
 
-        Ctx { by_id, commits_of, children_of, is_child, sessions }
+        Ctx { by_id, label_by_id, commits_of, children_of, is_child, sessions }
     }
 
     /// Top-level sessions (not a known branch-child), newest first.
@@ -453,12 +457,19 @@ impl<'a> Ctx<'a> {
         roots.sort_by(|a, b| b.modified.cmp(&a.modified));
         roots
     }
+
+    fn label(&self, id: &str) -> String {
+        self.label_by_id
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| compact_label(id, 8))
+    }
 }
 
 fn render_session(ctx: &Ctx, id: &str, prefix: &str, out: &mut String) {
     if let Some(s) = ctx.by_id.get(id) {
         out.push_str(prefix);
-        out.push_str(&session_line(s));
+        out.push_str(&session_line(s, &ctx.label(&s.id)));
     }
     print_children(ctx, id, prefix, out);
 }
@@ -491,7 +502,7 @@ fn print_children(ctx: &Ctx, session_id: &str, prefix: &str, out: &mut String) {
                 "{}{} {}\n",
                 prefix.if_supports_color(Stdout, |t| t.dimmed()),
                 connector.if_supports_color(Stdout, |t| t.dimmed()),
-                branch_label(ctx.by_id.get(b.session_id.as_str()), b),
+                branch_label(ctx.by_id.get(b.session_id.as_str()), b, &ctx.label(&b.session_id)),
             ));
             let deeper = format!("{prefix}{}", if last { "   " } else { "│  " });
             print_children(ctx, &b.session_id, &deeper, out);
@@ -499,11 +510,11 @@ fn print_children(ctx: &Ctx, session_id: &str, prefix: &str, out: &mut String) {
     }
 }
 
-fn session_line(s: &SessionRef) -> String {
+fn session_line(s: &SessionRef, label: &str) -> String {
     format!(
         "{} {}  {}   {}\n",
         "●".if_supports_color(Stdout, |t| t.bright_yellow()),
-        short(&s.id).if_supports_color(Stdout, |t| t.style(Style::new().bright_yellow().bold())),
+        label.if_supports_color(Stdout, |t| t.style(Style::new().bright_yellow().bold())),
         truncate(&s.summary, 50),
         meta(s.message_count, s.modified).if_supports_color(Stdout, |t| t.dimmed()),
     )
@@ -519,7 +530,7 @@ fn commit_label(c: &Commit) -> String {
     )
 }
 
-fn branch_label(child: Option<&&SessionRef>, b: &BranchRecord) -> String {
+fn branch_label(child: Option<&&SessionRef>, b: &BranchRecord, label: &str) -> String {
     let detail = match child {
         Some(s) => meta(s.message_count, s.modified),
         None => "missing".to_string(),
@@ -533,7 +544,7 @@ fn branch_label(child: Option<&&SessionRef>, b: &BranchRecord) -> String {
     format!(
         "{} {}  {} {} · {}",
         "○".if_supports_color(Stdout, |t| t.cyan()),
-        short(&b.session_id).if_supports_color(Stdout, |t| t.style(Style::new().cyan().bold())),
+        label.if_supports_color(Stdout, |t| t.style(Style::new().cyan().bold())),
         b.origin.if_supports_color(Stdout, |t| t.cyan()),
         format!("(from {from})").if_supports_color(Stdout, |t| t.dimmed()),
         detail.if_supports_color(Stdout, |t| t.dimmed()),
@@ -563,8 +574,8 @@ fn rel_time(t: Option<SystemTime>) -> String {
     }
 }
 
-fn short(id: &str) -> &str {
-    &id[..id.len().min(8)]
+fn short(id: &str) -> String {
+    compact_label(id, 8)
 }
 
 fn truncate(text: &str, width: usize) -> String {

@@ -22,6 +22,7 @@ use sily_core::provider::Provider;
 use sily_core::store::{ProjectSessions, SessionRef};
 
 use crate::graph;
+use crate::idfmt::{compact_label, unique_labels};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -121,6 +122,13 @@ fn build_tree(
     let mut tree = Tree { nodes: Vec::new(), roots: Vec::new() };
     let cwd_now = std::env::current_dir().ok();
     for (name, projects) in providers {
+        let labels = unique_labels(
+            projects
+                .iter()
+                .flat_map(|p| p.sessions.iter())
+                .map(|s| s.id.as_str()),
+            8,
+        );
         // (count, modified) per session id, for showing branch sizes.
         let info: HashMap<String, (usize, Option<SystemTime>)> = projects
             .iter()
@@ -157,7 +165,18 @@ fn build_tree(
 
         let mut top: Vec<usize> = Vec::new();
         for (seg, child) in &root.children {
-            top.push(convert_dir(&mut tree, format!("/{seg}"), child, commits, branches, name, &is_child, &info, cwd_now.as_deref()));
+            top.push(convert_dir(
+                &mut tree,
+                format!("/{seg}"),
+                child,
+                commits,
+                branches,
+                name,
+                &is_child,
+                &info,
+                &labels,
+                cwd_now.as_deref(),
+            ));
         }
         tree.nodes[adapter].children = top;
     }
@@ -176,6 +195,7 @@ fn convert_dir(
     provider: &str,
     is_child: &HashSet<String>,
     info: &HashMap<String, (usize, Option<SystemTime>)>,
+    labels: &HashMap<String, String>,
     cwd_now: Option<&Path>,
 ) -> usize {
     let mut cur = trie;
@@ -195,10 +215,21 @@ fn convert_dir(
         if is_child.contains(&s.id) {
             continue;
         }
-        children.push(convert_session(tree, s, commits, branches, provider, info, cwd_now));
+        children.push(convert_session(tree, s, commits, branches, provider, info, labels, cwd_now));
     }
     for (k, child) in &cur.children {
-        children.push(convert_dir(tree, format!("{label}/{k}"), child, commits, branches, provider, is_child, info, cwd_now));
+        children.push(convert_dir(
+            tree,
+            format!("{label}/{k}"),
+            child,
+            commits,
+            branches,
+            provider,
+            is_child,
+            info,
+            labels,
+            cwd_now,
+        ));
     }
 
     tree.push(Node {
@@ -216,6 +247,7 @@ fn count_sessions(t: &Trie) -> usize {
     t.sessions.len() + t.children.values().map(count_sessions).sum::<usize>()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn convert_session(
     tree: &mut Tree,
     s: &SessionRef,
@@ -223,6 +255,7 @@ fn convert_session(
     branches: &[BranchRecord],
     provider: &str,
     info: &HashMap<String, (usize, Option<SystemTime>)>,
+    labels: &HashMap<String, String>,
     cwd_now: Option<&Path>,
 ) -> usize {
     let cwd = s.meta.cwd.as_deref();
@@ -245,7 +278,10 @@ fn convert_session(
         let (cnt, modified) = info.get(&b.session_id).copied().unwrap_or((0, None));
         children.push(tree.push(Node {
             kind: Kind::Branch,
-            primary: short(&b.session_id).to_string(),
+            primary: labels
+                .get(&b.session_id)
+                .cloned()
+                .unwrap_or_else(|| compact_label(&b.session_id, 8)),
             secondary: format!("{} (from {})", b.origin, from),
             meta: meta_line(cnt, modified),
             resume: Some(with_cd(resume_command("claude-code", &b.session_id), cwd, cwd_now)),
@@ -255,7 +291,7 @@ fn convert_session(
     }
     tree.push(Node {
         kind: Kind::Session,
-        primary: short(&s.id).to_string(),
+        primary: labels.get(&s.id).cloned().unwrap_or_else(|| compact_label(&s.id, 8)),
         secondary: truncate(&s.summary, 60),
         meta: meta_line(s.message_count, s.modified),
         resume: Some(with_cd(resume_command(provider, &s.id), cwd, cwd_now)),
@@ -634,7 +670,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App<'_>) {
         Some(id) => {
             app.ensure_detail(id);
             (
-                format!(" graph: {} ", &id[..id.len().min(8)]),
+                format!(" graph: {} ", compact_label(id, 12)),
                 app.detail.get(id).cloned().unwrap_or_default(),
             )
         }
@@ -753,8 +789,8 @@ fn rel_time(t: Option<SystemTime>) -> String {
     }
 }
 
-fn short(id: &str) -> &str {
-    &id[..id.len().min(8)]
+fn short(id: &str) -> String {
+    compact_label(id, 8)
 }
 
 fn truncate(text: &str, width: usize) -> String {
