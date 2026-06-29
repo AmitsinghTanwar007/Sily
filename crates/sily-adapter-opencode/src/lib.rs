@@ -276,7 +276,15 @@ fn export(session_id: &str) -> Result<Value> {
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
-    serde_json::from_slice(&out.stdout).map_err(io_err)
+    parse_export_json(&out.stdout)
+}
+
+fn parse_export_json(stdout: &[u8]) -> Result<Value> {
+    let start = stdout
+        .iter()
+        .position(|b| *b == b'{')
+        .ok_or_else(|| io_err("opencode export did not contain JSON output"))?;
+    serde_json::from_slice(&stdout[start..]).map_err(io_err)
 }
 
 fn message_text(m: &Value) -> String {
@@ -315,4 +323,27 @@ fn find_new_session_id(text: &str, source: &str) -> Option<String> {
         }
     }
     best
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_export_json;
+
+    #[test]
+    fn parse_export_json_accepts_status_prefix() {
+        let raw = br#"Exporting session: ses_123
+{
+  "info": { "id": "ses_123" },
+  "messages": []
+}
+"#;
+        let value = parse_export_json(raw).unwrap();
+        assert_eq!(value["info"]["id"].as_str(), Some("ses_123"));
+    }
+
+    #[test]
+    fn parse_export_json_requires_object_payload() {
+        let err = parse_export_json(b"Exporting session only\n").unwrap_err();
+        assert!(err.to_string().contains("did not contain JSON output"));
+    }
 }
