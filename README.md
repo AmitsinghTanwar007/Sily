@@ -1,15 +1,26 @@
-# sily
+<p align="center">
+  <img src="assets/logo.svg" alt="sily" width="380">
+</p>
 
-**Save and restore your AI coding sessions — like git, but for AI chats.**
+<p align="center">
+  <strong>Version control for your AI coding sessions — commit, branch, and revert like git.</strong>
+</p>
 
-Works across **Claude Code**, **Codex CLI**, and **OpenCode** — one tool to browse,
-bookmark, and rewind sessions from any of them.
-
-In a session that's in a good state? Save it with `sily commit`. Keep going — and if
-it goes wrong, `sily revert` puts you right back at the good point, with the bad
-version still kept. No copy-paste, no losing work.
+<p align="center">
+  <a href="https://github.com/AmitsinghTanwar007/Sily/releases"><img src="https://img.shields.io/github/v/release/AmitsinghTanwar007/Sily?style=flat-square&color=27c93f" alt="Release"></a>
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/built%20with-Rust-orange?style=flat-square" alt="Built with Rust">
+</p>
 
 ---
+
+sily works across **Claude Code**, **Codex CLI**, and **OpenCode** — one tool to
+browse, bookmark, and rewind sessions from any of them.
+
+When a session is in a good state, save it with `sily commit`. Keep working — and if
+it goes wrong, `sily revert` puts you right back at the good point, with the bad
+version still kept. No copy-paste, no losing work.
 
 ## Install
 
@@ -17,8 +28,8 @@ version still kept. No copy-paste, no losing work.
 curl -fsSL https://raw.githubusercontent.com/AmitsinghTanwar007/Sily/main/install.sh | sh
 ```
 
-That's it — installs to `/usr/local/bin` (already on your PATH, so `sily` works
-right away; may ask for `sudo`).
+Installs to `/usr/local/bin` (already on your PATH, so `sily` works right away; may ask
+for `sudo`).
 
 Prefer not to use root? Install to a user directory instead:
 
@@ -26,10 +37,8 @@ Prefer not to use root? Install to a user directory instead:
 SILY_BIN_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/AmitsinghTanwar007/Sily/main/install.sh | sh
 ```
 
-(That auto-adds the directory to your shell PATH; run `source ~/.bashrc` once, or
-open a new terminal.)
-
----
+This auto-adds the directory to your shell PATH; open a new terminal (or
+`source ~/.bashrc`) once.
 
 ## Quick start
 
@@ -42,7 +51,7 @@ sily commit <session-id> -m "working great here"
 
 # 3. ...keep working. If it goes sideways:
 
-# 4. Go back — this prints a new session id AND the exact resume command
+# 4. Go back — prints a new session id AND the exact resume command
 sily revert <commit-name>
 
 # 5. Resume that session — sily prints the right command for the tool, e.g.:
@@ -51,99 +60,115 @@ codex resume <id>         # Codex CLI
 opencode --session <id>   # OpenCode
 ```
 
-You're back at the good point. Your messed-up version is still saved too — nothing
-is ever lost.
+You are back at the good point. The messed-up version is still saved too — nothing is
+ever lost.
 
----
+## Commands
 
-## All commands
-
-| Command | What it does |
-|---------|--------------|
+| Command | Description |
+|---------|-------------|
 | `sily list` | Interactive tree of sessions under the current directory (static when piped) |
 | `sily list --all` | Every project on the machine |
-| `sily log <session>` | Show recent messages (last 8; `--full` for all) |
-| `sily log <session> -p` | Show only *your* prompts (skip assistant/tools/noise) |
-| `sily tree <session>` | Show recent branch structure (last 8; `--full` for all) |
-| `sily graph <session>` | GitHub-style rail: branches/commits split off the timeline at their exact point |
-| `sily commit <session> -m "note" [--name x] [--at <msg>]` | Save a point you can return to (message required) |
+| `sily log <session>` | Recent messages (last 8; `--full` for all) |
+| `sily log <session> -p` | Only your prompts (skips assistant, tools, and noise) |
+| `sily tree <session>` | Recent branch structure (last 8; `--full` for all) |
+| `sily graph <session>` | Multi-lane rail: branches and commits split off the timeline at their exact point |
+| `sily commit <session> -m "note"` | Save a point you can return to (message required; `--name`, `--at` optional) |
 | `sily commits` | List your saved points |
-| `sily branch <session> [--at <msg>]` | Make a new session from any point |
-| `sily revert <commit> [--hard]` | Go back to a saved point (default: keeps old version) |
-| `sily merge <branch> [--into <session>]` | Combine a branch into its main — or into another branch via `--into` (shared base + both sides' work) |
+| `sily branch <session>` | Make a new session from any point (`--at <msg>`) |
+| `sily revert <commit>` | Go back to a saved point (default keeps the old version; `--hard` discards) |
+| `sily merge <branch>` | Combine a branch into its main, or another branch via `--into` |
 | `sily diff <a> <b>` | Show where two sessions differ |
-| `sily port <session>` | Copy a session's content into a new session in **another** tool (prompts for the target) |
+| `sily port <session>` | Copy a session into a new session in another tool (prompts for the target) |
 | `sily update` | Update sily to the latest release |
 
-In the interactive `sily list` (in a terminal): browse the tree on the left and the
-**selected session's graph** shows on the right — the same **multi-lane rail** as
-`sily graph`: newest-first, **noise filtered** (no `/exit`, `/compact`, tool/system
-plumbing), each branch in its own **parallel lane** from its fork point, and
-just-created branches as a `╰○` stub on the message they forked from. Speakers are
-labelled `you` / `ai`.
-Keys: `↑`/`↓` move, `→`/`Enter` expand (everything starts collapsed), `←` collapse,
-`y` copy the selected session's resume command, `r` reload (pick up changes made
-elsewhere), `q` quit.
+Lists show newest first.
 
-Lists show **newest first** (`sily commits`, `sily log`).
+### The graph
 
-Tips:
-- A **commit** is just a tiny bookmark (a pointer), not a copy — save as many as you like.
-- `revert` is **safe by default**: it creates a *new* session and leaves everything else
-  intact. Use `--hard` only if you want to truly discard the later messages.
-- Most commands take an optional `--at <message-id>` to act on an exact point instead
-  of the latest one.
+`sily graph <session>` (and the right pane of the interactive `sily list`) draw a
+multi-lane rail: the main timeline is the trunk, each branch runs in its own parallel
+lane from the message it forked at, and just-created branches appear as a stub on that
+message. Conversation noise (`/exit`, `/compact`, tool and system records) is filtered
+out, speakers are labelled, and the newest message is at the top.
 
----
+```
+> sily graph acc159f8
 
-## How it works (short version)
+  acc159f8 (newest first)
+    other idea done          <- branch 691f6dd9
+    try the other idea
+    keep going on main
+    fork point here          + 42af3664 (no new conversation)
+    start the project
+```
+
+### Interactive browser
+
+In a terminal, `sily list` opens a two-pane browser: the session tree on the left, the
+selected session's graph on the right.
+
+| Key | Action |
+|-----|--------|
+| Up / Down | Move |
+| Right / Enter | Expand (everything starts collapsed) |
+| Left | Collapse |
+| `y` | Copy the selected session's resume command |
+| `r` | Reload (pick up changes made elsewhere) |
+| `q` | Quit |
+
+### Tips
+
+- A commit is a tiny bookmark (a pointer), not a copy — save as many as you like.
+- `revert` is safe by default: it creates a new session and leaves everything else
+  intact. Use `--hard` only to truly discard the later messages.
+- Most commands take an optional `--at <message-id>` to act on an exact point.
+
+## How it works
 
 Each tool keeps its sessions on disk — Claude Code and Codex as JSONL files, OpenCode
 in a SQLite database. sily reads those, slices a session at the point you choose, and
-produces a new session you can resume — all without calling any API. Your commits
-(tiny pointers) live in `~/.sily/`.
+produces a new session you can resume — without calling any API. Your commits (tiny
+pointers) live in `~/.sily/`.
 
-Built in Rust as a clean core + pluggable adapters. Every tool is **one
-`impl Provider`** (a trait in `sily-core`), so the CLI is identical across tools and
+It is built in Rust as a clean core plus pluggable adapters. Every tool is one
+`impl Provider` (a trait in `sily-core`), so the CLI is identical across tools and
 adding a new one is a single adapter crate.
 
-| Tool | List / browse | Commit / branch / revert | Branch point | Resume |
-|------|:---:|:---:|------|--------|
-| **Claude Code** | ✅ | ✅ | message id | `claude --resume <id>` |
-| **Codex CLI** | ✅ | ✅ | message number (`--at 3`) | `codex resume <id>` |
-| **OpenCode** | ✅ | ✅ (experimental, via its own `export`/`import`) | message id | `opencode --session <id>` |
-| **Gemini CLI** | ✅ | — | — | `gemini --resume` |
-| **Pi** | ✅ (incl. tree) | — | message id | `pi --resume <id>` |
+| Tool | Browse | Commit / branch / revert | Branch point | Resume |
+|------|--------|--------------------------|--------------|--------|
+| Claude Code | Yes | Yes | message id | `claude --resume <id>` |
+| Codex CLI | Yes | Yes | message number (`--at 3`) | `codex resume <id>` |
+| OpenCode | Yes | Experimental (via its own export/import) | message id | `opencode --session <id>` |
+| Gemini CLI | Yes | — | — | `gemini --resume` |
+| Pi | Yes (incl. tree) | — | message id | `pi --resume <id>` |
 
-Gemini is listing-only (its `logs.json` records only user prompts). Pi is read-only
-for now (full list/log/tree, but branch/port unverified).
+Gemini is listing-only (its `logs.json` records only user prompts). Pi is read-only for
+now (full list, log, and tree; branch and port unverified).
 
-**Write operations** (`branch`, `revert`, `merge`, `port`) work for **Claude Code,
-Codex CLI, and OpenCode**. Claude is fully verified; Codex and OpenCode writes are
-**experimental** — they produce new sessions via each tool's own format/import, so
-confirm the resumed session looks right. `merge` works branch→main *and*
-branch→branch (it finds the shared base and appends the other side's work).
+Write operations (`branch`, `revert`, `merge`, `port`) work for Claude Code, Codex CLI,
+and OpenCode. Claude is fully verified; Codex and OpenCode writes are experimental — they
+produce new sessions via each tool's own format, so confirm the resumed session looks
+right. `merge` works branch-to-main and branch-to-branch (it finds the shared base and
+appends the other side's work).
 
-Where each tool's data lives: Claude `~/.claude`, Codex `~/.codex/sessions`, OpenCode
-its SQLite db (`~/.local/share/opencode`), Gemini `~/.gemini/tmp/*/logs.json`, Pi
+Where each tool's data lives: Claude `~/.claude`, Codex `~/.codex/sessions`, OpenCode its
+SQLite database (`~/.local/share/opencode`), Gemini `~/.gemini/tmp/*/logs.json`, Pi
 `~/.pi/agent/sessions`. Override with `SILY_CLAUDE_HOME`, `SILY_CODEX_HOME`,
 `SILY_OPENCODE_DB`, `SILY_GEMINI_HOME`, `SILY_PI_DIR`.
 
 ### Move a session between tools
 
-`sily port <session>` copies a session's conversation into a **new session in a
-different tool** — e.g. continue a Codex session over in OpenCode:
+`sily port <session>` copies a session's conversation into a new session in a different
+tool — for example, continue a Codex session over in OpenCode:
 
 ```bash
-sily port <codex-session-id>      # prompts: which provider? → opencode
-# → ported N messages → opencode session ...   resume with: opencode --session <id>
+sily port <codex-session-id>      # prompts: which provider? -> opencode
 ```
 
 It carries the conversation as readable context (the new session opens knowing what
-happened); tool-specific execution state doesn't transfer. (`--to <provider>` skips
-the prompt; OpenCode target is experimental — verify the result.)
-
----
+happened); tool-specific execution state does not transfer. `--to <provider>` skips the
+prompt. The OpenCode target is experimental — verify the result.
 
 ## License
 

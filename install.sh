@@ -10,6 +10,29 @@ set -eu
 REPO="AmitsinghTanwar007/Sily"
 BIN_DIR="${SILY_BIN_DIR:-/usr/local/bin}"
 
+# Pixelate reveal of the `>_ sily` mark. Falls back to a plain line when output
+# isn't a terminal, NO_COLOR/SILY_NO_ANIM is set, or fractional sleep is missing.
+sily_banner() {
+    if [ ! -t 1 ] || [ -n "${NO_COLOR:-}" ] || [ -n "${SILY_NO_ANIM:-}" ] || ! sleep 0.01 2>/dev/null; then
+        printf '\n  >_ sily  -  AI session version control\n\n'
+        return
+    fi
+    esc=$(printf '\033')
+    g="${esc}[32m"; b="${esc}[1m"; d="${esc}[2m"; r="${esc}[0m"
+    printf '\n  %s>_%s ' "$g" "$r"
+    for ch in s i l y; do
+        for blk in '░' '▒' '▓'; do
+            printf '%s%s%s' "$d" "$blk" "$r"
+            sleep 0.03 2>/dev/null || true
+            printf '\b'
+        done
+        printf '%s%s%s' "$b" "$ch" "$r"
+    done
+    printf '\n  %sAI session version control%s\n\n' "$d" "$r"
+}
+
+sily_banner
+
 os=$(uname -s)
 arch=$(uname -m)
 

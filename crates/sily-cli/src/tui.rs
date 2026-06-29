@@ -8,8 +8,10 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
+use std::time::Duration;
+
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
@@ -489,9 +491,56 @@ where
     let listings = relist();
     let mut app = App::new(build_tree(&listings, commits, branches), registry, commits, branches);
     let mut terminal = ratatui::init();
+    let _ = splash(&mut terminal); // brief pixelate reveal; ignore errors / skippable
     let result = event_loop(&mut terminal, &mut app, &relist);
     ratatui::restore();
     result.map(|_| app.picked)
+}
+
+/// A short pixelate reveal of the `>_ sily` mark when the browser opens. Each
+/// character resolves from block noise into its final glyph. Any key skips it.
+fn splash(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
+    if std::env::var_os("SILY_NO_SPLASH").is_some() {
+        return Ok(());
+    }
+    let target: Vec<char> = crate::brand::MARK.chars().collect();
+    let blocks = ['░', '▒', '▓', '█'];
+    let green = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(Color::DarkGray);
+    for step in 0..target.len() + 3 {
+        let text: String = target
+            .iter()
+            .enumerate()
+            .map(|(i, &ch)| {
+                if i < step || ch == ' ' {
+                    ch
+                } else {
+                    blocks[(step + i) % blocks.len()]
+                }
+            })
+            .collect();
+        terminal.draw(|f| {
+            let area = f.area();
+            let y = area.height / 2;
+            let line = Rect { x: area.x, y, width: area.width, height: 1 };
+            f.render_widget(Paragraph::new(Line::styled(text.clone(), green)).alignment(Alignment::Center), line);
+            if y + 2 < area.height {
+                let sub = Rect { x: area.x, y: y + 2, width: area.width, height: 1 };
+                f.render_widget(
+                    Paragraph::new(Line::styled("AI session version control", dim)).alignment(Alignment::Center),
+                    sub,
+                );
+            }
+        })?;
+        if event::poll(Duration::from_millis(85))? {
+            if let Event::Key(k) = event::read()? {
+                if k.kind == KeyEventKind::Press {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn event_loop<F>(

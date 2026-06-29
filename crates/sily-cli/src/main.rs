@@ -6,6 +6,7 @@
 //! tool is just one more `impl Provider`.
 
 mod branchstore;
+mod brand;
 mod commitstore;
 mod graph;
 mod render;
@@ -81,7 +82,7 @@ struct Cli {
     #[arg(long, global = true)]
     cwd: Option<String>,
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -241,11 +242,15 @@ fn now_iso() -> String {
 }
 
 fn run(cli: Cli) -> Result<(), CliError> {
-    if let Cmd::Update = cli.cmd {
+    let Some(cmd) = cli.cmd else {
+        print!("{}", brand::banner());
+        return Ok(());
+    };
+    if let Cmd::Update = cmd {
         return update::run().map_err(CliError::Msg);
     }
     let ctx = build_ctx(cli.cwd)?;
-    match cli.cmd {
+    match cmd {
         Cmd::List { all } => cmd_list(&ctx, all)?,
         Cmd::Log { session, prompts, full } => {
             let limit = if full { None } else { Some(DEFAULT_LIMIT) };
